@@ -889,14 +889,13 @@ public final class Layout {
         List<DisplayList.Item> out = dl.items;
         float cx = o.width / 2;
         boolean any = false;
+        float maxW = o.width - 2 * o.marginX;
         if (s.title != null && !s.title.isEmpty()) {
-            y += 4.2f;
-            text(out, s.title, TextMetrics.FONT_TEXT, 4.4f, cx, y, DisplayList.ALIGN_CENTER);
+            y = centeredLines(out, s.title, 4.4f, 4.2f, cx, y, maxW);
             any = true;
         }
         if (s.subtitle != null && !s.subtitle.isEmpty()) {
-            y += 2.8f;
-            text(out, s.subtitle, TextMetrics.FONT_TEXT, 2.6f, cx, y, DisplayList.ALIGN_CENTER);
+            y = centeredLines(out, s.subtitle, 2.6f, 2.8f, cx, y, maxW);
             any = true;
         }
         boolean comp = s.composer != null && !s.composer.isEmpty();
@@ -908,6 +907,32 @@ public final class Layout {
             any = true;
         }
         return any ? y + 3.5f : y;
+    }
+
+    /**
+     * Centred text broken at spaces into lines no wider than maxW (a long title on a phone); a
+     * word too long for a line on its own is set smaller. Returns the last baseline.
+     */
+    private float centeredLines(List<DisplayList.Item> out, String text, float size, float lead, float cx, float y, float maxW) {
+        List<String> lines = new ArrayList<String>();
+        String line = "";
+        for (String word : text.trim().split("\\s+")) {
+            String cand = line.isEmpty() ? word : line + " " + word;
+            if (!line.isEmpty() && tm.width(cand, TextMetrics.FONT_TEXT, size) > maxW) {
+                lines.add(line);
+                line = word;
+            } else {
+                line = cand;
+            }
+        }
+        lines.add(line);
+        for (String l : lines) {
+            float w = tm.width(l, TextMetrics.FONT_TEXT, size);
+            float sz = w > maxW ? size * maxW / w : size;
+            y += lead * sz / size;
+            text(out, l, TextMetrics.FONT_TEXT, sz, cx, y, DisplayList.ALIGN_CENTER);
+        }
+        return y;
     }
 
     // --------------------------------------------------------------------------- system

@@ -228,6 +228,16 @@ public final class ScoreEdit {
         int idx = v.indexCovering(p.tick);
         if (idx < 0) return p;
         ChordRest at = v.items.get(idx);
+        int atStart = v.starts()[idx];
+        if (at.tuplet == null && !expressible(p.tick - atStart)) {
+            // A position no plain value reaches, as one inside another voice's triplet: build
+            // that tuplet here (as rests) and enter into it, as the position was tapped there.
+            Tuplet mirror = mirrorTuplet(m, p, v);
+            if (mirror != null) return enterInTuplet(s, p, v, mirror, template, type, dots);
+            int t = p.tick;
+            while (t > atStart && !expressible(t - atStart)) t--;
+            p = new Pos(p.measure, p.staff, p.voice, t);
+        }
 
         if (at.tuplet != null && !(p.tick == tupletStart(v, at.tuplet) && Duration.ticks(type, dots) >= at.tuplet.spanTicks())) {
             return enterInTuplet(s, p, v, at.tuplet, template, type, dots);
@@ -306,6 +316,49 @@ public final class ScoreEdit {
             }
         }
         return advance(s, cur);
+    }
+
+    /** True if a gap of this many ticks can be filled with plain (non-tuplet) values. */
+    static boolean expressible(int ticks) {
+        int sum = 0;
+        for (int[] d : Duration.decompose(ticks)) sum += Duration.ticks(d[0], d[1]);
+        return sum == ticks;
+    }
+
+    /**
+     * For a position inside a tuplet of another voice of the staff: lays out the same tuplet as
+     * rests in voice v, where v has only plain rests, and returns it; otherwise null.
+     */
+    private static Tuplet mirrorTuplet(Measure m, Pos p, Voice v) {
+        StaffMeasure sm = m.staves.get(p.staff);
+        for (int ov = 0; ov < StaffMeasure.VOICES; ov++) {
+            Voice other = sm.voices[ov];
+            if (ov == p.voice || other.isEmpty()) continue;
+            int oi = other.indexCovering(p.tick);
+            if (oi < 0 || other.items.get(oi).tuplet == null) continue;
+            Tuplet src = other.items.get(oi).tuplet;
+            int gs = tupletStart(other, src), ge = tupletEnd(other, src);
+            Tuplet t = new Tuplet(src.actual, src.normal, src.baseType);
+            if (ge - gs != t.spanTicks() || (p.tick - gs) * t.actual % t.normal != 0) continue;
+            int[] st = v.starts();
+            boolean plainRests = true;
+            for (int i = 0; i < v.items.size(); i++) {
+                if (st[i + 1] <= gs || st[i] >= ge) continue;
+                ChordRest cr = v.items.get(i);
+                if (!(cr instanceof Rest) || cr.tuplet != null || !expressible(gs - st[i]) || !expressible(st[i + 1] - Math.max(gs, Math.min(ge, st[i + 1])))) plainRests = false;
+            }
+            if (!plainRests) continue;
+            List<ChordRest> rests = new ArrayList<ChordRest>();
+            for (int i = 0; i < t.actual; i++) {
+                Rest r = new Rest();
+                r.type = t.baseType;
+                r.tuplet = t;
+                rests.add(r);
+            }
+            replaceRange(v, gs, t.spanTicks(), rests, null);
+            return t;
+        }
+        return null;
     }
 
     /** Puts a value inside an existing tuplet at p, scaled by its ratio (and cut at the tuplet's end). */

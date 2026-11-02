@@ -4,10 +4,10 @@ package io.github.vlesk.stave.model;
 public final class Dynamics {
     private Dynamics() {}
 
-    public static final String[] ALL = {"ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "fp", "sf", "sfz", "rfz"};
+    public static final String[] ALL = {"ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "fp", "sf", "sfz", "rf", "rfz"};
     private static final String[] SMUFL = {"dynamicPPP", "dynamicPP", "dynamicPiano", "dynamicMP", "dynamicMF", "dynamicForte",
-            "dynamicFF", "dynamicFFF", "dynamicFortePiano", "dynamicSforzato", "dynamicSforzando1", "dynamicRinforzando2"};
-    private static final int[] VELOCITY = {16, 33, 49, 64, 80, 96, 112, 126, 96, 112, 112, 112};
+            "dynamicFF", "dynamicFFF", "dynamicFortePiano", "dynamicSforzato", "dynamicSforzando1", "dynamicRinforzando1", "dynamicRinforzando2"};
+    private static final int[] VELOCITY = {16, 33, 49, 64, 80, 96, 112, 126, 96, 112, 112, 112, 112};
 
     public static int index(String d) {
         if (d == null) return -1;
@@ -27,6 +27,6 @@ public final class Dynamics {
 
     /** True for accent-like dynamics that do not change the running level. */
     public static boolean isAccent(String d) {
-        return "sf".equals(d) || "sfz".equals(d) || "rfz".equals(d) || "fp".equals(d);
+        return "sf".equals(d) || "sfz".equals(d) || "rf".equals(d) || "rfz".equals(d) || "fp".equals(d);
     }
 }

@@ -546,6 +546,38 @@ public class ModelTests {
                     "both in one triplet of eighths");
         }
 
+        // a note in an empty voice 2 at a triplet position of voice 1 (Beethoven op. 59 no. 2/ii): the
+        // voice takes the same triplet instead of losing ticks, and the note lands where it was tapped
+        {
+            List<Part> vp = new ArrayList<Part>();
+            vp.add(Instruments.byId("violin").create());
+            io.github.vlesk.stave.edit.EditorState es = new io.github.vlesk.stave.edit.EditorState(Score.create("T", "", vp, 4, 4, 0, 100, 2));
+            es.startInput();
+            es.setDuration(Duration.EIGHTH);
+            es.setTriplet(true);
+            for (int k = 0; k < 12; k++) es.enterPitch(72 + k, Integer.MIN_VALUE);
+            es.stopInput();
+            es.setTriplet(false);
+            es.setVoice(1);
+            es.startInput();
+            es.setCursor(new Pos(0, 0, 1, 160));
+            es.setDuration(Duration.QUARTER);
+            es.enterPitch(60, Integer.MIN_VALUE);
+            Voice v2 = es.score.measures.get(0).staves.get(0).voices[1];
+            check(v2.totalTicks() == 1920, "voice 2 fills the bar: " + v2.totalTicks());
+            int i160 = v2.indexAt(160);
+            check(i160 >= 0 && v2.items.get(i160) instanceof Chord && v2.items.get(i160).tuplet != null, "note at the triplet position, in a triplet");
+            // a position no value can reach is moved back to one that can, without losing ticks
+            es.setCursor(new Pos(1, 0, 1, 56));
+            es.setDuration(Duration.N64);
+            es.enterPitch(62, Integer.MIN_VALUE);
+            Voice w2 = es.score.measures.get(1).staves.get(0).voices[1];
+            check(w2.totalTicks() == 1920 && w2.indexAt(30) >= 0 && w2.items.get(w2.indexAt(30)) instanceof Chord, "unreachable position snapped: " + w2.totalTicks());
+            // a tick at the bar end means the next bar
+            es.setCursor(new Pos(0, 0, 1, 1920));
+            check(es.cursor.measure == 1 && es.cursor.tick == 0, "cursor at a bar end moves on: " + es.cursor);
+        }
+
         // keys pressed together on the piano make one chord; keys pressed one after another, separate notes
         {
             io.github.vlesk.stave.edit.EditorState es = new io.github.vlesk.stave.edit.EditorState(pianoScore());
@@ -646,7 +678,9 @@ public class ModelTests {
             es.selectNote(new Pos(1, 0, 0, 0), -1);
             es.hairpin(ChordRest.DIMINUENDO);
             ChordRest c4 = es.score.measures.get(1).staves.get(0).voices[0].items.get(0);
-            check(c4.hairpin == ChordRest.DIMINUENDO && c4.hairpinTicks == 960, "diminuendo over this and the next note");
+            check(c4.hairpin == ChordRest.DIMINUENDO && c4.hairpinTicks == 480, "diminuendo under the selected note");
+            es.hairpin(ChordRest.DIMINUENDO);
+            check(c4.hairpin == ChordRest.DIMINUENDO && c4.hairpinTicks == 960, "pressed again: over this and the next note");
             List<io.github.vlesk.stave.model.Spanners.Span> spans = io.github.vlesk.stave.model.Spanners.all(es.score);
             check(spans.size() == 4, "four lines: " + spans.size());
             // layout: a curve per slur, two lines per hairpin

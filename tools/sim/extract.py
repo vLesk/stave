@@ -1,6 +1,6 @@
 """Reads a score with music21 and writes what a person would type, staff by staff, as JSON."""
 import json, sys
-from music21 import corpus, stream, note, chord, dynamics, expressions, articulations, meter, key, clef
+from music21 import corpus, stream, note, chord, dynamics, expressions, articulations, meter, key, clef, spanner
 
 ART = {'Staccato': 'staccato', 'Accent': 'accent', 'Tenuto': 'tenuto', 'StrongAccent': 'marcato',
        'Staccatissimo': 'staccatissimo', 'Spiccato': 'staccatissimo'}
@@ -20,10 +20,11 @@ def main(path, out):
            'composer': (md.composer or '') if md else '', 'staves': [], 'unsupported': {}}
     def unsup(k):
         res['unsupported'][k] = res['unsupported'].get(k, 0) + 1
-    for p in s.parts:
+    where = {}  # id of a note, chord or rest -> (staff, measure, voice, event index)
+    for si, p in enumerate(s.parts):
         inst = p.getInstrument(returnDefault=True)
         st = {'id': p.id, 'name': p.partName or '', 'instrument': (inst.instrumentName or ''), 'measures': []}
-        for m in p.getElementsByClass(stream.Measure):
+        for mi, m in enumerate(p.getElementsByClass(stream.Measure)):
             mm = {'number': m.number, 'ql': float(m.duration.quarterLength), 'bar': float(m.barDuration.quarterLength)}
             if m.timeSignature is not None: mm['ts'] = [m.timeSignature.numerator, m.timeSignature.denominator]
             if m.keySignature is not None: mm['key'] = m.keySignature.sharps
@@ -35,17 +36,30 @@ def main(path, out):
             mm['dyn'] = dyns
             voices = list(m.voices) if m.hasVoices() else [m]
             vs = []
-            for v in voices:
+            for vi, v in enumerate(voices):
                 evs = []
+                graces = []
                 for el in v.notesAndRests:
                     if el.duration.isGrace:
-                        unsup('grace notes'); continue
+                        # grace notes belong to the next main note, as entered in the app
+                        ns = el.notes if isinstance(el, chord.Chord) else [el]
+                        graces.append({'type': el.duration.type, 'slash': bool(getattr(el.duration, 'slash', False)),
+                                       'pitches': [[n.pitch.midi, int(n.pitch.accidental.alter) if n.pitch.accidental else 0,
+                                                    n.pitch.step] for n in ns]})
+                        continue
+                    where[id(el)] = (si, mi, vi, len(evs))
+                    if isinstance(el, chord.Chord):
+                        for n in el.notes: where[id(n)] = (si, mi, vi, len(evs))
                     ev = {'off': float(el.offset), 'ql': float(el.quarterLength), 'type': el.duration.type,
                           'dots': el.duration.dots}
                     if el.duration.tuplets:
                         t = el.duration.tuplets[0]
                         ev['tuplet'] = [t.numberNotesActual, t.numberNotesNormal]
                         ev['tunit'] = t.durationNormal.type if t.durationNormal else el.duration.type
+                    if graces:
+                        if el.isRest: unsup('grace notes before a rest')
+                        else: ev['graces'] = graces
+                        graces = []
                     if el.isRest:
                         ev['rest'] = True
                     else:
@@ -74,6 +88,23 @@ def main(path, out):
             mm['voices'] = vs
             st['measures'].append(mm)
         res['staves'].append(st)
+    # slurs and hairpins: on their first event, where they end
+    for sp in s.spannerBundle:
+        if isinstance(sp, spanner.Slur): kind = 'slur'
+        elif isinstance(sp, dynamics.Crescendo): kind = 'cresc'
+        elif isinstance(sp, dynamics.Diminuendo): kind = 'dim'
+        else: continue
+        els = sp.getSpannedElements()
+        ws = [where.get(id(e)) for e in els]
+        if not els or None in ws:
+            g = any(e.duration.isGrace for e in els)
+            unsup(kind + (' from a grace note' if g else ' on an unknown element')); continue
+        # music21 does not keep a wedge's ends in order, and gives some only their start
+        a, b = min(ws, key=lambda w: (w[1], w[3])), max(ws, key=lambda w: (w[1], w[3]))
+        if a[0] != b[0]: unsup(kind + ' across staves'); continue
+        if a[2] != b[2]: unsup(kind + ' across voices'); continue
+        ev = res['staves'][a[0]]['measures'][a[1]]['voices'][a[2]][a[3]]
+        ev.setdefault('lines', []).append([kind, b[1], b[3]])
     json.dump(res, open(out, 'w'), indent=0)
     print(path, 'staves', len(res['staves']), 'measures', len(res['staves'][0]['measures']), 'unsupported', res['unsupported'])
 

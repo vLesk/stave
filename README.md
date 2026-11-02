@@ -134,7 +134,7 @@ to a GitHub release. *Delete release* is a maintenance workflow that removes a r
 tools/test.sh [dir-with-.mscx-files]      # JVM tests: model, editing, file formats, playback
 RENDER_DIR=/tmp/png tools/test.sh         # also renders engraving samples to PNG via Java2D
 ROBO_LIB=/path/to/robolectric-jars tools/robolectric.sh   # UI smoke tests + screenshots
-tools/simulate.sh                         # enters three complex scores as a user would and compares
+tools/simulate.sh                         # enters five complex scores as a user would and compares
 ```
 
 `tools/robolectric.sh` needs Robolectric 4.14 and its dependencies from Maven Central, plus
@@ -142,9 +142,12 @@ tools/simulate.sh                         # enters three complex scores as a use
 classes from the Apache-2.0 sources in `github.com/android/android-test` (`runner/monitor`).
 
 `tools/simulate.sh` installs music21 (from PyPI) into the build cache and takes Schubert's *Der
-Lindenbaum*, Joplin's *Maple Leaf Rag* and the first movement of Beethoven's Op. 18 No. 1 from its
-corpus. It enters every note through the editor with the controls a user would tap, then checks the
-result note by note and the layout at phone width.
+Lindenbaum*, Joplin's *Maple Leaf Rag*, the first movement of Beethoven's Op. 18 No. 1, Clara
+Schumann's Polonaise Op. 1 No. 2 and the second movement of Beethoven's Op. 59 No. 2 from its
+corpus. It enters every note, grace note, slur, hairpin, dynamic and lyric through the editor with
+the controls a user would tap, then checks the result note by note and the layout at phone width.
+Mistakes in the source files (a tie into another pitch, a note past the barline) are counted
+separately from the app's problems.
 
 `tools/test.sh` also loads MuseScore's own engraving test corpus when you pass its directory
 (`src/engraving/tests` in the MuseScore repository). It round-trips every file through the

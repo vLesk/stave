@@ -453,7 +453,8 @@ public final class EditorState {
 
     /** Moves the input cursor to a tapped position. */
     public void setCursor(Pos p) {
-        cursor = p.copy();
+        cursor = ScoreEdit.normalizePos(score, p);
+        if (cursor.measure >= score.measures.size()) cursor = new Pos(score.measures.size() - 1, p.staff, p.voice, 0);
         voice = p.voice;
         lastEntered = null;
     }
@@ -656,7 +657,7 @@ public final class EditorState {
     /**
      * &lt; and &gt; (MuseScore): a crescendo or diminuendo hairpin. In note input it starts on the
      * element just entered and follows the next ones until pressed again; on a selected note it
-     * reaches over the next one, and again extends it by one; on a range it covers the range.
+     * covers that note, and each further press extends it by one; on a range it covers the range.
      */
     public boolean hairpin(int kind) {
         if (inputMode) {
@@ -687,13 +688,20 @@ public final class EditorState {
         }
         ChordRest cr = selectedChordRest();
         if (cr == null) return false;
+        if (cr.hairpin != kind || cr.hairpinTicks <= 0) {
+            // first press: under the selected note (a swell on one long note, say)
+            checkpoint();
+            cr.hairpin = kind;
+            cr.hairpinTicks = cr.ticks();
+            changed();
+            return true;
+        }
         int start = globalTick(selPos);
-        int end = cr.hairpin == kind && cr.hairpinTicks > 0 ? start + cr.hairpinTicks : start + cr.ticks();
+        int end = start + cr.hairpinTicks;
         Pos np = posAt(end, selPos);
         ChordRest nx = ScoreEdit.elementAt(score, np);
         if (nx == null) return false;
         checkpoint();
-        cr.hairpin = kind;
         cr.hairpinTicks = end + nx.ticks() - start;
         changed();
         return true;
