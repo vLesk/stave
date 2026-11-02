@@ -12,9 +12,13 @@ import io.github.vlesk.stave.model.Part;
 import io.github.vlesk.stave.model.Pitch;
 import io.github.vlesk.stave.model.Rest;
 import io.github.vlesk.stave.model.Score;
+import io.github.vlesk.stave.model.Spanners;
 import io.github.vlesk.stave.model.Syllables;
 import io.github.vlesk.stave.model.StaffMeasure;
 import io.github.vlesk.stave.model.Voice;
+
+import java.util.HashMap;
+import java.util.Map;
 
 /** MusicXML 4.0 (partwise) export for exchange with other notation programs. */
 public final class MusicXmlWriter {
@@ -29,7 +33,39 @@ public final class MusicXmlWriter {
             {"m6", "minor-sixth"}, {"9", "dominant-ninth"}, {"maj9", "major-ninth"}, {"m9", "minor-ninth"},
             {"11", "dominant-11th"}, {"13", "dominant-13th"}, {"mmaj7", "major-minor"}, {"5", "power"}};
 
+    /** Where slurs end and hairpins stop (MusicXML marks both at the end). */
+    private static final class Lines {
+        final java.util.Set<ChordRest> slurEnds = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<ChordRest, Boolean>());
+        final Map<String, Integer> wedgeStops = new HashMap<String, Integer>();
+
+        Lines(Score s) {
+            for (Spanners.Span sp : Spanners.all(s)) {
+                if (sp.kind == 0) {
+                    if (sp.end != null) slurEnds.add(sp.end);
+                } else {
+                    String k = sp.endMeasure + "/" + sp.staff + "/" + sp.voice + "/" + sp.endTickInMeasure;
+                    Integer n = wedgeStops.get(k);
+                    wedgeStops.put(k, n == null ? 1 : n + 1);
+                }
+            }
+        }
+    }
+
+    private static void wedgeStops(Xml x, Lines lines, int m, int st, int v, int tick, int staffNo, int nst) {
+        Integer n = lines.wedgeStops.get(m + "/" + st + "/" + v + "/" + tick);
+        if (n == null) return;
+        for (int k = 0; k < n; k++) {
+            x.open("direction");
+            x.open("direction-type");
+            x.empty("wedge", "type", "stop", "number", "1");
+            x.close();
+            if (nst > 1) x.tag("staff", staffNo);
+            x.close();
+        }
+    }
+
     public static String write(Score s) {
+        Lines lines = new Lines(s);
         Xml x = new Xml();
         x.raw("<!DOCTYPE score-partwise PUBLIC \"-//Recordare//DTD MusicXML 4.0 Partwise//EN\" \"http://www.musicxml.org/dtds/partwise.dtd\">\n");
         x.open("score-partwise", "version", "4.0");
@@ -149,7 +185,7 @@ public final class MusicXmlWriter {
                             x.close();
                             pos = 0;
                         }
-                        writeVoice(x, s, voice, m, first + si, v, si + 1, nst, si * 4 + v + 1);
+                        writeVoice(x, s, voice, m, first + si, v, si + 1, nst, si * 4 + v + 1, lines);
                         pos = voice.totalTicks();
                     }
                 }
@@ -189,9 +225,19 @@ public final class MusicXmlWriter {
         return false;
     }
 
-    private static void writeVoice(Xml x, Score s, Voice voice, int m, int st, int v, int staffNo, int nst, int voiceNo) {
+    private static void writeVoice(Xml x, Score s, Voice voice, int m, int st, int v, int staffNo, int nst, int voiceNo, Lines lines) {
+        int[] vstarts = voice.starts();
         for (int i = 0; i < voice.items.size(); i++) {
             ChordRest cr = voice.items.get(i);
+            wedgeStops(x, lines, m, st, v, vstarts[i], staffNo, nst);
+            if (cr.hairpin != 0 && cr.hairpinTicks > 0) {
+                x.open("direction", "placement", "below");
+                x.open("direction-type");
+                x.empty("wedge", "type", cr.hairpin == ChordRest.DIMINUENDO ? "diminuendo" : "crescendo", "number", "1");
+                x.close();
+                if (nst > 1) x.tag("staff", staffNo);
+                x.close();
+            }
             if (cr.dynamic != null) {
                 x.open("direction", "placement", "below");
                 x.open("direction-type");
@@ -257,6 +303,25 @@ public final class MusicXmlWriter {
                 continue;
             }
             Chord c = (Chord) cr;
+            for (Chord g : c.graces) {
+                for (int ni = 0; ni < g.notes.size(); ni++) {
+                    Note n = g.notes.get(ni);
+                    x.open("note");
+                    if (g.graceKind == Chord.ACCIACCATURA) x.empty("grace", "slash", "yes");
+                    else x.empty("grace");
+                    if (ni > 0) x.empty("chord");
+                    x.open("pitch");
+                    x.tag("step", Pitch.stepName(Pitch.step(n.tpc)));
+                    if (Pitch.alter(n.tpc) != 0) x.tag("alter", Pitch.alter(n.tpc));
+                    x.tag("octave", Pitch.octave(n.pitch, n.tpc));
+                    x.close();
+                    x.tag("voice", voiceNo);
+                    x.tag("type", Duration.musicXmlName(g.type));
+                    x.tag("stem", "up");
+                    if (nst > 1) x.tag("staff", staffNo);
+                    x.close();
+                }
+            }
             for (int ni = 0; ni < c.notes.size(); ni++) {
                 Note n = c.notes.get(ni);
                 boolean tieStop = tiedFromPrevious(s, m, st, v, i, n.pitch);
@@ -280,13 +345,16 @@ public final class MusicXmlWriter {
                     if (!a.equals(Articulation.FERMATA) && Articulation.index(a) >= 0) arts = true;
                 }
                 boolean fermata = c.articulations.contains(Articulation.FERMATA);
-                if (tieStop || n.tieForward || (ni == 0 && (arts || fermata || tupletStart || tupletStop))) {
+                boolean slurStop = lines.slurEnds.contains(c), slurStart = c.slurTicks > 0;
+                if (tieStop || n.tieForward || (ni == 0 && (arts || fermata || tupletStart || tupletStop || slurStart || slurStop))) {
                     x.open("notations");
                     if (tieStop) x.empty("tied", "type", "stop");
                     if (n.tieForward) x.empty("tied", "type", "start");
                     if (ni == 0) {
                         if (tupletStart) x.empty("tuplet", "type", "start", "bracket", "yes");
                         if (tupletStop) x.empty("tuplet", "type", "stop");
+                        if (slurStop) x.empty("slur", "type", "stop", "number", "1");
+                        if (slurStart) x.empty("slur", "type", "start", "number", "1");
                         if (fermata) x.empty("fermata", "type", "upright");
                         StringBuilder artic = new StringBuilder();
                         StringBuilder orn = new StringBuilder();
@@ -317,6 +385,7 @@ public final class MusicXmlWriter {
                 x.close();
             }
         }
+        wedgeStops(x, lines, m, st, v, s.measures.get(m).ticks(), staffNo, nst);
     }
 
     private static void timeMod(Xml x, ChordRest cr) {

@@ -14,12 +14,15 @@ import io.github.vlesk.stave.model.Part;
 import io.github.vlesk.stave.model.Pitch;
 import io.github.vlesk.stave.model.Rest;
 import io.github.vlesk.stave.model.Score;
+import io.github.vlesk.stave.model.Spanners;
 import io.github.vlesk.stave.model.Syllables;
 import io.github.vlesk.stave.model.StaffMeasure;
 import io.github.vlesk.stave.model.Tuplet;
 import io.github.vlesk.stave.model.Voice;
 
 import java.util.HashMap;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.Map;
 
 /**
@@ -115,6 +118,7 @@ public final class MscxWriter {
 
         // Pre-compute tie targets so that the arriving note can write its <prev> location.
         Map<String, int[]> tieArrivals = new HashMap<String, int[]>();
+        Map<String, List<int[]>> spanEnds = spanEnds(s);
         for (int m = 0; m < s.measures.size(); m++) {
             for (int st = 0; st < s.staffCount(); st++) {
                 for (int v = 0; v < StaffMeasure.VOICES; v++) {
@@ -210,7 +214,7 @@ public final class MscxWriter {
                             x.close();
                         }
                     }
-                    writeVoice(x, s, voice, m, st, v, tieArrivals);
+                    writeVoice(x, s, voice, m, st, v, tieArrivals, spanEnds);
                     if (v == 0 && mm.endBarline != Measure.BAR_NORMAL && mm.endBarline != Measure.BAR_END_REPEAT) {
                         x.open("BarLine");
                         x.tag("subtype", Measure.BAR_MSCX[mm.endBarline]);
@@ -244,7 +248,36 @@ public final class MscxWriter {
         return new int[]{mm, t};
     }
 
-    private static void writeVoice(Xml x, Score s, Voice voice, int m, int st, int v, Map<String, int[]> tieArrivals) {
+    private static String spanKey(int m, int st, int v, int tick) {
+        return m + "/" + st + "/" + v + "/" + tick;
+    }
+
+    /** Where slurs and hairpins end: MuseScore writes a &lt;Spanner&gt; with &lt;prev&gt; there. */
+    private static Map<String, List<int[]>> spanEnds(Score s) {
+        Map<String, List<int[]>> ends = new HashMap<String, List<int[]>>();
+        for (Spanners.Span sp : Spanners.all(s)) {
+            String k = spanKey(sp.endMeasure, sp.staff, sp.voice, sp.endTickInMeasure);
+            List<int[]> l = ends.get(k);
+            if (l == null) ends.put(k, l = new ArrayList<int[]>());
+            l.add(new int[]{sp.kind, sp.measure, sp.tick});
+        }
+        return ends;
+    }
+
+    private static void writeSpanEnds(Xml x, Map<String, List<int[]>> spanEnds, int m, int st, int v, int tick) {
+        List<int[]> l = spanEnds.get(spanKey(m, st, v, tick));
+        if (l == null) return;
+        for (int[] e : l) {
+            x.open("Spanner", "type", e[0] == 0 ? "Slur" : "HairPin");
+            x.open("prev");
+            location(x, e[1] - m, e[2] - tick, 0);
+            x.close();
+            x.close();
+        }
+    }
+
+    private static void writeVoice(Xml x, Score s, Voice voice, int m, int st, int v, Map<String, int[]> tieArrivals,
+                                   Map<String, List<int[]>> spanEnds) {
         int[] starts = voice.starts();
         Tuplet open = null;
         for (int i = 0; i < voice.items.size(); i++) {
@@ -252,6 +285,28 @@ public final class MscxWriter {
             if (open != null && cr.tuplet != open) {
                 x.empty("endTuplet");
                 open = null;
+            }
+            writeSpanEnds(x, spanEnds, m, st, v, starts[i]);
+            // slurs and hairpins starting here, as MuseScore writes them: <next><location> to their end
+            if (cr.hairpin != 0 && cr.hairpinTicks > 0) {
+                int[] e = Spanners.posOf(s, Syllables.globalTick(s, m, starts[i]) + cr.hairpinTicks);
+                x.open("Spanner", "type", "HairPin");
+                x.open("HairPin");
+                x.tag("subtype", cr.hairpin == ChordRest.DIMINUENDO ? 1 : 0);
+                x.close();
+                x.open("next");
+                location(x, e[0] - m, e[1] - starts[i], 0);
+                x.close();
+                x.close();
+            }
+            if (cr instanceof Chord && cr.slurTicks > 0) {
+                int[] e = Spanners.posOf(s, Syllables.globalTick(s, m, starts[i]) + cr.slurTicks);
+                x.open("Spanner", "type", "Slur");
+                x.empty("Slur");
+                x.open("next");
+                location(x, e[0] - m, e[1] - starts[i], 0);
+                x.close();
+                x.close();
             }
             if (cr.tuplet != null && cr.tuplet != open) {
                 open = cr.tuplet;
@@ -306,6 +361,19 @@ public final class MscxWriter {
                 x.close();
             } else {
                 Chord c = (Chord) cr;
+                for (Chord g : c.graces) {
+                    x.open("Chord");
+                    x.tag("durationType", Duration.xmlName(g.type));
+                    x.empty(g.graceKind == Chord.ACCIACCATURA ? "acciaccatura"
+                            : g.type == Duration.N16 ? "grace16" : g.type == Duration.N32 ? "grace32" : g.type == Duration.QUARTER ? "grace4" : "appoggiatura");
+                    for (Note gn : g.notes) {
+                        x.open("Note");
+                        x.tag("pitch", gn.pitch);
+                        x.tag("tpc", gn.tpc);
+                        x.close();
+                    }
+                    x.close();
+                }
                 x.open("Chord");
                 if (c.dots > 0) x.tag("dots", c.dots);
                 x.tag("durationType", Duration.xmlName(c.type));
@@ -362,6 +430,7 @@ public final class MscxWriter {
             }
         }
         if (open != null) x.empty("endTuplet");
+        writeSpanEnds(x, spanEnds, m, st, v, s.measures.get(m).ticks());
     }
 
     private static void location(Xml x, int measures, int ticks, int notes) {

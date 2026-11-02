@@ -17,7 +17,11 @@ import android.view.View;
  */
 public final class PianoView extends View {
     public interface Listener {
-        void onKey(int pitch);
+        /**
+         * A key was pressed. withHeldKeys is true when other keys are still held down, so the keys
+         * pressed together make one chord.
+         */
+        void onKey(int pitch, boolean withHeldKeys);
     }
 
     private static final boolean[] BLACK = {false, true, false, true, false, false, true, false, true, false, true, false};
@@ -198,9 +202,10 @@ public final class PianoView extends View {
                     return true;
                 }
                 int p = pitchAt(x, y);
+                boolean held = pressed.size() > 0;
                 pressed.put(id, p);
                 performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-                if (listener != null) listener.onKey(p);
+                if (listener != null) listener.onKey(p, held);
                 announceForAccessibility(io.github.vlesk.stave.model.Pitch.name(p, io.github.vlesk.stave.model.Pitch.spell(p, 0)));
                 invalidate();
                 getParent().requestDisallowInterceptTouchEvent(true);

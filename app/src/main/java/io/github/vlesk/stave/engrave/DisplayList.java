@@ -75,6 +75,8 @@ public final class DisplayList {
         public int noteIdx = -1;
         /** Text baseline (lyric hits only). */
         public float baseline;
+        /** Index of the grace chord of cr this hit is on, or -1. */
+        public int grace = -1;
     }
 
     public static final class SystemInfo {

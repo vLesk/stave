@@ -12,6 +12,7 @@ import io.github.vlesk.stave.model.Note;
 import io.github.vlesk.stave.model.Part;
 import io.github.vlesk.stave.model.Pitch;
 import io.github.vlesk.stave.model.Pos;
+import io.github.vlesk.stave.model.Spanners;
 import io.github.vlesk.stave.model.Syllables;
 import io.github.vlesk.stave.model.Rest;
 import io.github.vlesk.stave.model.Score;
@@ -110,6 +111,10 @@ public final class Layout {
     private final int staffCount;
 
     private static final float HEAD_W = Sym.width(Sym.noteheadBlack);
+    /** Grace notes: size (MuseScore's graceNoteMag is 0.7) and the gap after each one. */
+    private static final float GRACE_SCALE = 0.65f, GRACE_GAP = 0.3f;
+    /** Gap between the last grace note and its main note (clear of the main note's ledger lines). */
+    private static final float GRACE_TO_NOTE = 0.6f;
 
     // Lyrics, following MuseScore's engraving style defaults (src/engraving/style/styledef.cpp), in staff spaces
     /** Edwin 10pt at the default spatium (lyricsOddFontSize / lyricsEvenFontSize). */
@@ -463,6 +468,8 @@ public final class Layout {
                                 prevLine = ln;
                             }
                             if (accs > 0) acc = Math.max(acc, 0.3f + Math.min(accs, 3) * 1.15f);
+                            float gw = graceWidth(ch, s.keyAt(m));
+                            if (gw > 0) acc = Math.max(acc, (accs > 0 ? 0.3f + Math.min(accs, 3) * 1.15f : 0) + gw);
                             if (second) right += HEAD_W;
                             if (ch.lyric != null && v.starts()[idx] == c.tick) {
                                 // keep neighbouring lyrics apart by MuseScore's gap (more when a dash has to fit
@@ -541,7 +548,11 @@ public final class Layout {
         return w;
     }
 
+    /** Slurs and hairpins of the score, resolved once per layout. */
+    private List<Spanners.Span> spans;
+
     private void run() {
+        spans = Spanners.all(s);
         computeAccidentals();
         prepareMeasures();
         dl.width = o.width;
@@ -591,6 +602,7 @@ public final class Layout {
             sysIdx++;
         }
         drawTies();
+        drawSlurs();
         drawLyricLines();
         if (o.pageHeight > 0) dl.height = (page + 1) * o.pageHeight;
         else dl.height = y + 2;
@@ -903,11 +915,93 @@ public final class Layout {
                 Pos pos = new Pos(m, st, v, starts[i]);
                 if (cr instanceof Chord) {
                     emitChord(g, byIdx[i], pos, sysIdx);
+                    if (!((Chord) cr).graces.isEmpty()) emitGraces(g, (Chord) cr, clef, drums, dl.xAt(m, starts[i]), pos, s.keyAt(m));
                 } else {
                     emitRest(g, (Rest) cr, pos, mi, voicesUsed > 1, v);
                 }
             }
             emitTuplets(g, voice, starts, byIdx, m, v);
+        }
+    }
+
+    // --------------------------------------------------------------------------- grace notes
+
+    /** The accidental a grace note shows (its own alteration if the key does not give it), or -1. */
+    private static int graceAccidental(Note n, int key) {
+        int alt = Pitch.alter(n.tpc);
+        if (alt == Pitch.keyAlter(key, Pitch.step(n.tpc))) return -1;
+        return Sym.accidentalDoubleFlat + Math.max(-2, Math.min(2, alt)) + 2;
+    }
+
+    /** Room the grace notes of a chord need before it (and before its accidentals). */
+    private float graceWidth(Chord c, int key) {
+        if (c.graces.isEmpty()) return 0;
+        float w = GRACE_TO_NOTE;
+        for (Chord gr : c.graces) {
+            float acc = 0;
+            for (Note n : gr.notes) {
+                int ag = graceAccidental(n, key);
+                if (ag >= 0) acc = Math.max(acc, Sym.width(ag) * GRACE_SCALE + 0.1f);
+            }
+            w += HEAD_W * GRACE_SCALE + GRACE_GAP + acc;
+        }
+        return w;
+    }
+
+    /**
+     * Grace notes before a chord, small and stems up, with a slash through an acciaccatura's stem,
+     * their own accidentals and ledger lines, placed right to left from the main chord's accidentals.
+     */
+    private void emitGraces(StaffGen g, Chord c, int clef, boolean drums, float x, Pos pos, int key) {
+        int accs = 0;
+        for (Note n : c.notes) if (accidental.containsKey(n)) accs++;
+        float cur = x - (accs > 0 ? 0.3f + Math.min(accs, 3) * 1.15f : 0) - GRACE_TO_NOTE;
+        float hw = HEAD_W * GRACE_SCALE;
+        for (int k = c.graces.size() - 1; k >= 0; k--) {
+            Chord gr = c.graces.get(k);
+            float hx = cur - hw;
+            float left = hx;
+            int minL = Integer.MAX_VALUE, maxL = Integer.MIN_VALUE;
+            for (Note n : gr.notes) {
+                int ln = noteLine(clef, drums, n);
+                minL = Math.min(minL, ln);
+                maxL = Math.max(maxL, ln);
+                DisplayList.Item it = glyph(g.items, Sym.noteheadBlack, hx, ln * 0.5f);
+                it.w = GRACE_SCALE;
+                it.owner = c;
+                it.note = n;
+                it.voice = pos.voice;
+                int ag = graceAccidental(n, key);
+                if (ag >= 0) {
+                    float aw = Sym.width(ag) * GRACE_SCALE;
+                    DisplayList.Item a = glyph(g.items, ag, hx - aw - 0.1f, ln * 0.5f);
+                    a.w = GRACE_SCALE;
+                    a.owner = c;
+                    a.note = n;
+                    left = Math.min(left, hx - aw - 0.1f);
+                }
+                DisplayList.Hit h = new DisplayList.Hit();
+                h.x0 = hx - 0.15f;
+                h.x1 = hx + hw + 0.15f;
+                h.y0 = ln * 0.5f - 0.6f;
+                h.y1 = ln * 0.5f + 0.6f;
+                h.pos = pos;
+                h.cr = c;
+                h.note = n;
+                h.grace = k;
+                g.hits.add(h);
+            }
+            for (int l = -2; l >= minL; l -= 2) line(g.items, hx - 0.2f, l * 0.5f, hx + hw + 0.2f, l * 0.5f, Sym.legerLineThickness * 0.8f).owner = c;
+            for (int l = 10; l <= maxL; l += 2) line(g.items, hx - 0.2f, l * 0.5f, hx + hw + 0.2f, l * 0.5f, Sym.legerLineThickness * 0.8f).owner = c;
+            float sx = hx + hw - Sym.stemThickness / 2;
+            float top = minL * 0.5f - 2.4f;
+            line(g.items, sx, maxL * 0.5f - 0.1f, sx, top, Sym.stemThickness).owner = c;
+            DisplayList.Item f = glyph(g.items, gr.type >= Duration.N16 ? Sym.flag16thUp : Sym.flag8thUp, sx - Sym.stemThickness / 2, top);
+            f.w = GRACE_SCALE;
+            f.owner = c;
+            if (gr.graceKind == Chord.ACCIACCATURA) line(g.items, sx - 0.55f, top + 1.45f, sx + 0.75f, top + 0.5f, 0.12f).owner = c;
+            g.ext(top - 0.5f, maxL * 0.5f + 0.6f);
+            cur = left - GRACE_GAP;
         }
     }
 
@@ -1407,17 +1501,24 @@ public final class Layout {
         for (int m = m0; m <= m1; m++) {
             for (Voice v : s.measures.get(m).staves.get(st).voices) {
                 for (ChordRest cr : v.items) {
-                    if (cr.dynamic != null) hasDyn = true;
+                    if (cr.dynamic != null || cr.hairpin != 0) hasDyn = true;
                     if (cr.lyric != null) hasLyrics = true;
                     if (cr.chordSymbol != null) hasChords = true;
                     if (cr.staffText != null) hasText = true;
                 }
             }
         }
+        int sysStart = Syllables.globalTick(s, m0, 0), sysEnd = Syllables.globalTick(s, m1, s.measures.get(m1).ticks());
+        for (Spanners.Span sp : spans) {
+            if (sp.kind != 0 && sp.staff == st && sp.startTick < sysEnd && sp.endTick > sysStart) hasDyn = true;
+        }
         float dynY = Math.max(6.2f, g.bottom + 2.2f);
         float lyrY = hasDyn ? dynY + 3.0f : Math.max(LYRIC_BASELINE, g.bottom + LYRIC_MIN_TOP_DISTANCE + LYRIC_ASCENT);
         float chordY = Math.min(-2.0f, g.top - 1.0f);
         float textY = hasChords ? chordY - 2.8f : chordY;
+        for (Spanners.Span sp : spans) {
+            if (sp.kind != 0 && sp.staff == st && sp.startTick < sysEnd && sp.endTick > sysStart) hairpin(g, sp, m0, m1, sysStart, sysEnd, dynY);
+        }
         for (int m = m0; m <= m1; m++) {
             for (int v = 0; v < StaffMeasure.VOICES; v++) {
                 Voice voice = s.measures.get(m).staves.get(st).voices[v];
@@ -1665,6 +1766,144 @@ public final class Layout {
         float[] p2 = new float[k];
         System.arraycopy(pts, 0, p2, 0, k);
         poly(out, p2);
+    }
+
+    // --------------------------------------------------------------------------- hairpins and slurs
+
+    /** MuseScore's hairpinHeight and hairpinContHeight, and its line width. */
+    private static final float HAIRPIN_H = 1.2f, HAIRPIN_CONT_H = 0.6f, HAIRPIN_W = 0.12f;
+
+    /** x of a tick counted from the start of the score, within the measures m0..m1 of this system. */
+    private float xOfGlobal(int global, int m0, int m1) {
+        int[] mt = Spanners.posOf(s, global);
+        if (mt[0] < m0) return dl.measures.get(m0).contentX;
+        if (mt[0] > m1) {
+            DisplayList.MeasureInfo last = dl.measures.get(m1);
+            return last.x + last.width;
+        }
+        if (mt[1] >= s.measures.get(mt[0]).ticks()) {
+            DisplayList.MeasureInfo mi = dl.measures.get(mt[0]);
+            return mi.x + mi.width;
+        }
+        return dl.xAt(mt[0], mt[1]);
+    }
+
+    /** A dynamic mark at a tick of a staff (any voice), or null. */
+    private String dynamicAt(int st, int global) {
+        int[] mt = Spanners.posOf(s, global);
+        if (mt[1] >= s.measures.get(mt[0]).ticks()) return null;
+        for (Voice v : s.measures.get(mt[0]).staves.get(st).voices) {
+            int i = v.indexAt(mt[1]);
+            if (i >= 0 && v.items.get(i).dynamic != null) return v.items.get(i).dynamic;
+        }
+        return null;
+    }
+
+    /**
+     * A crescendo or diminuendo hairpin on the dynamics line, as MuseScore draws it: closed at its
+     * narrow end, 1.2 sp open at the wide end, clear of dynamic marks at either end. Across a line
+     * break, the part on the next system starts (or ends) half open.
+     */
+    private void hairpin(StaffGen g, Spanners.Span sp, int m0, int m1, int sysStart, int sysEnd, float dynY) {
+        boolean before = sp.startTick < sysStart, after = sp.endTick > sysEnd;
+        float x0, x1;
+        if (before) {
+            x0 = dl.measures.get(m0).contentX - 0.8f;
+        } else {
+            x0 = xOfGlobal(sp.startTick, m0, m1) - 0.2f;
+            String d = dynamicAt(sp.staff, sp.startTick);
+            if (d != null && Dynamics.smufl(d) != null) x0 += Sym.width(Sym.byName(Dynamics.smufl(d))) + 0.5f;
+        }
+        if (after) {
+            DisplayList.MeasureInfo last = dl.measures.get(m1);
+            x1 = last.x + last.width - 0.5f;
+        } else {
+            x1 = xOfGlobal(sp.endTick, m0, m1) - 0.7f;
+            if (dynamicAt(sp.staff, sp.endTick) != null) x1 = xOfGlobal(sp.endTick, m0, m1) - 0.8f;
+        }
+        if (x1 - x0 < 1.5f) x1 = x0 + 1.5f;
+        boolean cresc = sp.kind == ChordRest.CRESCENDO;
+        float o0 = cresc ? (before ? HAIRPIN_CONT_H : 0) : HAIRPIN_H;
+        float o1 = cresc ? HAIRPIN_H : (after ? HAIRPIN_CONT_H : 0);
+        float y = dynY - 0.6f;
+        line(g.items, x0, y - o0 / 2, x1, y - o1 / 2, HAIRPIN_W).owner = sp.start;
+        line(g.items, x0, y + o0 / 2, x1, y + o1 / 2, HAIRPIN_W).owner = sp.start;
+        g.ext(y - HAIRPIN_H, y + HAIRPIN_H);
+    }
+
+    /**
+     * Slurs, drawn once every system is placed (like ties): from notehead to notehead on the side
+     * away from the stems, reaching to a stem end when the last note's stem is on that side, and
+     * arched over the notes in between. Across a line break, a part on each system.
+     */
+    private void drawSlurs() {
+        for (Spanners.Span sp : spans) {
+            if (sp.kind != 0 || sp.end == null) continue;
+            Chord a = (Chord) sp.start, b = (Chord) sp.end;
+            NoteRec at = noteRecs.get(a.top()), ab = noteRecs.get(a.bottom()), bt = noteRecs.get(b.top()), bb = noteRecs.get(b.bottom());
+            if (at == null || ab == null || bt == null || bb == null) continue;
+            boolean up = at.tieUp;
+            float x1 = at.x + at.headW / 2, x2 = bt.x + bt.headW / 2;
+            float y1 = up ? at.y - 0.9f : ab.y + 0.9f;
+            boolean endStem = bt.tieUp != up;
+            float y2 = up ? (endStem ? bt.y - 3.3f : bt.y - 0.9f) : (endStem ? bb.y + 3.3f : bb.y + 0.9f);
+            // the notes in between (and their stems) the slur must clear
+            List<float[]> between = new ArrayList<float[]>();
+            int base = Syllables.globalTick(s, sp.measure, 0);
+            for (int m = sp.measure; m <= sp.endMeasure && m < s.measures.size(); m++) {
+                Voice voice = s.measures.get(m).staves.get(sp.staff).voices[sp.voice];
+                int[] starts = voice.starts();
+                for (int i = 0; i < voice.items.size(); i++) {
+                    int gt = base + starts[i];
+                    if (gt <= sp.startTick || gt >= sp.endTick || !(voice.items.get(i) instanceof Chord)) continue;
+                    Chord c = (Chord) voice.items.get(i);
+                    NoteRec r = noteRecs.get(up ? c.top() : c.bottom());
+                    if (r == null) continue;
+                    float edge = up ? (r.tieUp ? r.y - 0.9f : r.y - 3.4f) : (r.tieUp ? r.y + 3.4f : r.y + 0.9f);
+                    between.add(new float[]{r.system, r.x + r.headW / 2, edge});
+                }
+                base += s.measures.get(m).ticks();
+            }
+            if (at.system == bt.system) {
+                slurCurve(x1, y1, x2, y2, up, between, at.system, a);
+            } else {
+                DisplayList.SystemInfo sa = dl.systems.get(at.system), sb = dl.systems.get(bt.system);
+                slurCurve(x1, y1, sa.x1 - 0.3f, y1, up, between, at.system, a);
+                float yb = up ? bt.y - 0.9f - 1.0f : bb.y + 0.9f + 1.0f;
+                slurCurve(dl.measures.get(sb.firstMeasure).contentX - 1.0f, yb, x2, y2, up, between, bt.system, a);
+            }
+        }
+    }
+
+    private void slurCurve(float x1, float y1, float x2, float y2, boolean up, List<float[]> between, int system, ChordRest owner) {
+        if (x2 - x1 < 1.0f) x2 = x1 + 1.0f;
+        float len = x2 - x1;
+        float h = Math.min(2.0f, 0.6f + 0.06f * len);
+        for (float[] b : between) {
+            if ((int) b[0] != system || b[1] <= x1 || b[1] >= x2) continue;
+            float t = (b[1] - x1) / len;
+            float lineY = y1 + (y2 - y1) * t;
+            float need = up ? lineY - (b[2] - 0.5f) : (b[2] + 0.5f) - lineY;
+            float bulge = 3 * t * (1 - t); // height of the curve at t for unit h (control points at 4/3 h)
+            if (need > 0) h = Math.max(h, need / Math.max(0.35f, bulge));
+        }
+        h = Math.min(h, 5f) * (up ? -1 : 1);
+        float th = 0.2f * (up ? -1 : 1);
+        int n = 20;
+        float[] pts = new float[(n + 1) * 4];
+        int k = 0;
+        for (int i = 0; i <= n; i++) {
+            float t = i / (float) n;
+            pts[k++] = bez(x1, x1 + len * 0.25f, x2 - len * 0.25f, x2, t);
+            pts[k++] = bez(y1, y1 + h * 1.33f, y2 + h * 1.33f, y2, t);
+        }
+        for (int i = n; i >= 0; i--) {
+            float t = i / (float) n;
+            pts[k++] = bez(x1, x1 + len * 0.25f, x2 - len * 0.25f, x2, t);
+            pts[k++] = bez(y1, y1 + (h - th) * 1.33f, y2 + (h - th) * 1.33f, y2, t);
+        }
+        DisplayList.Item it = poly(dl.items, pts);
+        it.owner = owner;
     }
 
     // --------------------------------------------------------------------------- lyrics

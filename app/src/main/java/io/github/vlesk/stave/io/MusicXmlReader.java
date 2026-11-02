@@ -186,6 +186,11 @@ public final class MusicXmlReader {
             s.measures.add(m);
         }
 
+        // slurs (start, stop) and hairpins (start element and kind; where they stop), resolved at the end
+        List<ChordRest[]> slurPairs = new ArrayList<ChordRest[]>();
+        Map<String, ChordRest> openSlurs = new HashMap<String, ChordRest>();
+        List<Object[]> wedgeStarts = new ArrayList<Object[]>();
+        List<int[]> wedgeStops = new ArrayList<int[]>();
         boolean firstPart = true;
         for (Element pe : partEls) {
             Part p = partsById.get(pe.getAttribute("id"));
@@ -196,6 +201,9 @@ public final class MusicXmlReader {
             boolean curSym = false;
             List<Element> measures = Xml.children(pe, "measure");
             Map<String, Note> openTies = new HashMap<String, Note>();
+            // grace notes wait for the next chord of their staff and voice
+            Map<String, List<Chord>> pendingGraces = new HashMap<String, List<Chord>>();
+            int[] pendingWedge = null;
             for (int mi = 0; mi < measures.size(); mi++) {
                 Element me = measures.get(mi);
                 Measure mm = s.measures.get(mi);
@@ -248,6 +256,16 @@ public final class MusicXmlReader {
                     } else if (tag.equals("direction")) {
                         int staffNo = Xml.intText(el, "staff", 1);
                         for (Element dt : Xml.children(el, "direction-type")) {
+                            Element wedge = Xml.child(dt, "wedge");
+                            if (wedge != null) {
+                                String wt = wedge.getAttribute("type");
+                                int off = ticks(Xml.intText(el, "offset", 0), divisions);
+                                if ("crescendo".equals(wt) || "diminuendo".equals(wt)) {
+                                    pendingWedge = new int[]{"diminuendo".equals(wt) ? ChordRest.DIMINUENDO : ChordRest.CRESCENDO, firstStaff + staffNo - 1};
+                                } else if ("stop".equals(wt)) {
+                                    wedgeStops.add(new int[]{firstStaff + staffNo - 1, mi, Math.max(0, pos + off)});
+                                }
+                            }
                             Element dyn = Xml.child(dt, "dynamics");
                             if (dyn != null) {
                                 for (Element d : Xml.children(dyn)) {
@@ -307,7 +325,8 @@ public final class MusicXmlReader {
                             else if (style.equals("dashed")) mm.endBarline = Measure.BAR_DASHED;
                         }
                     } else if (tag.equals("note")) {
-                        if (Xml.child(el, "grace") != null || Xml.child(el, "cue") != null) continue;
+                        if (Xml.child(el, "cue") != null) continue;
+                        Element graceEl = Xml.child(el, "grace");
                         boolean isChord = Xml.child(el, "chord") != null;
                         int dur = ticks(Xml.intText(el, "duration", 0), divisions);
                         int staffNo = Math.max(1, Math.min(nst, Xml.intText(el, "staff", 1)));
@@ -328,6 +347,21 @@ public final class MusicXmlReader {
                             int oct = Xml.intText(unpitched, "display-octave", 4);
                             int pitch = Pitch.pitchFromDiatonic(oct * 7 + Math.max(0, step), 0);
                             note = new Note(pitch, Pitch.tpcFromStepAlter(Math.max(0, step), 0));
+                        }
+                        if (graceEl != null) {
+                            if (note != null) {
+                                String gk = staffNo + ":" + voiceKey;
+                                List<Chord> pend = pendingGraces.get(gk);
+                                if (pend == null) pendingGraces.put(gk, pend = new ArrayList<Chord>());
+                                if (isChord && !pend.isEmpty()) {
+                                    pend.get(pend.size() - 1).addNote(note);
+                                } else {
+                                    int gt = Duration.typeFromXml(Xml.text(el, "type"));
+                                    pend.add(Chord.grace("yes".equals(graceEl.getAttribute("slash")) ? Chord.ACCIACCATURA : Chord.APPOGGIATURA,
+                                            gt < 0 ? Duration.EIGHTH : gt, note));
+                                }
+                            }
+                            continue;
                         }
                         if (isChord && lastChord != null && note != null) {
                             lastChord.addNote(note);
@@ -369,6 +403,8 @@ public final class MusicXmlReader {
                             c.type = type;
                             c.dots = dots;
                             c.addNote(note);
+                            List<Chord> graces = pendingGraces.remove(staffNo + ":" + voiceKey);
+                            if (graces != null) c.graces.addAll(graces);
                             handleTies(el, note, openTies, staffNo + ":" + voiceKey);
                             lastChord = c;
                             lastChordTick = start;
@@ -376,6 +412,15 @@ public final class MusicXmlReader {
                             // notations
                             Element nots = Xml.child(el, "notations");
                             if (nots != null) {
+                                for (Element sl : Xml.children(nots, "slur")) {
+                                    String key = firstStaff + ":" + sl.getAttribute("number");
+                                    if ("start".equals(sl.getAttribute("type"))) {
+                                        openSlurs.put(key, c);
+                                    } else if ("stop".equals(sl.getAttribute("type"))) {
+                                        ChordRest from = openSlurs.remove(key);
+                                        if (from != null) slurPairs.add(new ChordRest[]{from, c});
+                                    }
+                                }
                                 Element arts = Xml.child(nots, "articulations");
                                 for (Element a : Xml.children(arts)) {
                                     String t = a.getTagName();
@@ -434,6 +479,10 @@ public final class MusicXmlReader {
                             if (stop || fill >= t.spanTicks()) {
                                 openTuplets.remove(tKey);
                             }
+                        }
+                        if (pendingWedge != null && pendingWedge[1] == firstStaff + staffNo - 1) {
+                            wedgeStarts.add(new Object[]{cr, pendingWedge[0]});
+                            pendingWedge = null;
                         }
                         if (pendingDyn != null && (pendingStaff == 0 || pendingStaff == staffNo)) {
                             cr.dynamic = pendingDyn;
@@ -522,7 +571,48 @@ public final class MusicXmlReader {
             }
         }
         Syllables.resolveExtends(s, res.melismaExtends);
+        resolveLines(s, slurPairs, wedgeStarts, wedgeStops);
         return res;
+    }
+
+    /** Slur and hairpin lengths, once the voices are final: from where their elements ended up. */
+    private static void resolveLines(Score s, List<ChordRest[]> slurPairs, List<Object[]> wedgeStarts, List<int[]> wedgeStops) {
+        if (slurPairs.isEmpty() && wedgeStarts.isEmpty()) return;
+        java.util.IdentityHashMap<ChordRest, int[]> where = new java.util.IdentityHashMap<ChordRest, int[]>();
+        int base = 0;
+        for (Measure mm : s.measures) {
+            for (int st = 0; st < mm.staves.size(); st++) {
+                for (Voice v : mm.staves.get(st).voices) {
+                    int[] starts = v.starts();
+                    for (int i = 0; i < v.items.size(); i++) where.put(v.items.get(i), new int[]{base + starts[i], st});
+                }
+            }
+            base += mm.ticks();
+        }
+        for (ChordRest[] pr : slurPairs) {
+            int[] a = where.get(pr[0]), b = where.get(pr[1]);
+            if (a != null && b != null && b[0] > a[0]) pr[0].slurTicks = b[0] - a[0];
+        }
+        boolean[] used = new boolean[wedgeStops.size()];
+        for (Object[] ws : wedgeStarts) {
+            ChordRest cr = (ChordRest) ws[0];
+            int[] a = where.get(cr);
+            if (a == null) continue;
+            int best = -1, bestTick = Integer.MAX_VALUE;
+            for (int k = 0; k < wedgeStops.size(); k++) {
+                int[] st = wedgeStops.get(k);
+                if (used[k] || st[0] != a[1] || st[1] >= s.measures.size()) continue;
+                int t = Syllables.globalTick(s, st[1], st[2]);
+                if (t > a[0] && t < bestTick) {
+                    best = k;
+                    bestTick = t;
+                }
+            }
+            if (best < 0) continue;
+            used[best] = true;
+            cr.hairpin = (Integer) ws[1];
+            cr.hairpinTicks = bestTick - a[0];
+        }
     }
 
     private static boolean hasOwnAttributes(List<Element> partEls, int measure) {

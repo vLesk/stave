@@ -11,6 +11,7 @@ import io.github.vlesk.stave.model.Pos;
 import io.github.vlesk.stave.model.Rest;
 import io.github.vlesk.stave.model.Score;
 import io.github.vlesk.stave.model.ScoreEdit;
+import io.github.vlesk.stave.model.Spanners;
 import io.github.vlesk.stave.model.StaffMeasure;
 import io.github.vlesk.stave.model.Syllables;
 import io.github.vlesk.stave.model.Voice;
@@ -45,6 +46,12 @@ public final class EditorState {
     public int durType = Duration.QUARTER;
     public int dots;
     public boolean triplet;
+    /** Index of the selected grace chord of the selected chord, or -1. */
+    public int selGrace = -1;
+    /** A grace note was just added: the next piano key or letter gives its pitch. */
+    public boolean graceAwaitingPitch;
+    /** Notes in the tuplet entered while {@link #triplet} is on: 3 for triplets, 5 for quintuplets, ... */
+    public int tupletActual = 3;
     /** The value a new triplet is built on: the duration selected when triplets were turned on (-1: the entered value). */
     public int tripletUnit = -1;
     public int voice;
@@ -101,12 +108,16 @@ public final class EditorState {
     // ------------------------------------------------------------------ selection
 
     public void clearSelection() {
+        selGrace = -1;
+        graceAwaitingPitch = false;
         selKind = SEL_NONE;
         selPos = null;
         selNote = -1;
     }
 
     public void selectNote(Pos p, int noteIdx) {
+        selGrace = -1;
+        graceAwaitingPitch = false;
         selKind = noteIdx >= 0 ? SEL_NOTE : SEL_CHORDREST;
         selPos = p.copy();
         selNote = noteIdx;
@@ -117,6 +128,8 @@ public final class EditorState {
     }
 
     public void selectMeasure(int m, int staff) {
+        selGrace = -1;
+        graceAwaitingPitch = false;
         selKind = SEL_RANGE;
         rangeM1 = rangeM2 = m;
         rangeS1 = rangeS2 = staff;
@@ -125,6 +138,8 @@ public final class EditorState {
 
     /** Extends the current selection to a range ending at the measure/staff (long-press). */
     public void extendTo(int m, int staff) {
+        selGrace = -1;
+        graceAwaitingPitch = false;
         int am, as;
         if (selKind == SEL_RANGE) {
             am = rangeM1;
@@ -147,6 +162,8 @@ public final class EditorState {
     }
 
     public void selectAll() {
+        selGrace = -1;
+        graceAwaitingPitch = false;
         selKind = SEL_RANGE;
         rangeM1 = 0;
         rangeM2 = score.measures.size() - 1;
@@ -161,6 +178,8 @@ public final class EditorState {
     }
 
     public Note selectedNote() {
+        Chord gr = selectedGrace();
+        if (gr != null) return gr.top();
         ChordRest cr = selectedChordRest();
         if (cr instanceof Chord) {
             Chord c = (Chord) cr;
@@ -226,6 +245,8 @@ public final class EditorState {
     public void stopInput() {
         inputMode = false;
         chordMode = false;
+        slurOpen = false;
+        hairpinOpen = 0;
     }
 
     private void clampCursor() {
@@ -253,6 +274,7 @@ public final class EditorState {
 
     /** Enters a pitch at the cursor (or adds it to the current chord in chord mode). Returns the pitch. */
     public int enterPitch(int pitch, int forcedAlter) {
+        if (graceAwaitingPitch && selectedGrace() != null) return setGracePitch(pitch, forcedAlter);
         if (cursor == null) startInput();
         pitch = Math.max(0, Math.min(127, pitch));
         int key = score.keyAt(cursor.measure);
@@ -271,8 +293,9 @@ public final class EditorState {
         Chord c = new Chord();
         c.addNote(new Note(pitch, tpc));
         Pos at = cursor.copy();
-        Pos after = ScoreEdit.enter(score, at, c, durType, dots, triplet, tripletUnit);
+        Pos after = ScoreEdit.enter(score, at, c, durType, dots, triplet ? tupletActual : 0, tripletUnit);
         lastEntered = at;
+        followLines(at);
         cursor = after;
         cursor.voice = voice;
         selectEnteredNote(at, pitch);
@@ -280,7 +303,23 @@ public final class EditorState {
         return pitch;
     }
 
+    /**
+     * A key of the on-screen piano. Keys pressed while others are still held join the chord just
+     * entered, so a chord is played rather than built with the chord-mode toggle.
+     */
+    public int enterPianoKey(int pitch, boolean withHeldKeys) {
+        boolean was = chordMode;
+        if (withHeldKeys && lastEntered != null) chordMode = true;
+        try {
+            return enterPitch(pitch, Integer.MIN_VALUE);
+        } finally {
+            chordMode = was;
+        }
+    }
+
     private void selectEnteredNote(Pos at, int pitch) {
+        selGrace = -1;
+        graceAwaitingPitch = false;
         ChordRest cr = ScoreEdit.elementAt(score, at);
         int idx = -1;
         if (cr instanceof Chord) {
@@ -304,12 +343,15 @@ public final class EditorState {
     }
 
     public void enterRest() {
+        selGrace = -1;
+        graceAwaitingPitch = false;
         if (cursor == null) startInput();
         checkpoint();
         Pos at = cursor.copy();
-        cursor = ScoreEdit.enter(score, at, null, durType, dots, triplet, tripletUnit);
+        cursor = ScoreEdit.enter(score, at, null, durType, dots, triplet ? tupletActual : 0, tripletUnit);
         cursor.voice = voice;
         lastEntered = null;
+        followLines(at);
         selKind = SEL_CHORDREST;
         selPos = at;
         selNote = -1;
@@ -318,6 +360,8 @@ public final class EditorState {
 
     /** Enters a tied copy of the previous chord at the cursor (MuseScore "+" in note input). */
     public boolean enterTie() {
+        selGrace = -1;
+        graceAwaitingPitch = false;
         if (cursor == null) return false;
         Pos prev = lastEntered;
         if (prev == null) prev = ScoreEdit.prev(score, cursor);
@@ -330,9 +374,10 @@ public final class EditorState {
         for (Note n : tmpl.notes) n.tieForward = false;
         for (Note n : ((Chord) pcr).notes) n.tieForward = true;
         Pos at = cursor.copy();
-        cursor = ScoreEdit.enter(score, at, tmpl, durType, dots, triplet, tripletUnit);
+        cursor = ScoreEdit.enter(score, at, tmpl, durType, dots, triplet ? tupletActual : 0, tripletUnit);
         cursor.voice = voice;
         lastEntered = at;
+        followLines(at);
         selKind = SEL_CHORDREST;
         selPos = at;
         selNote = -1;
@@ -375,6 +420,8 @@ public final class EditorState {
     }
 
     public void moveCursor(int dir) {
+        selGrace = -1;
+        graceAwaitingPitch = false;
         if (inputMode && cursor != null) {
             Pos snap = ScoreEdit.snapToElement(score, cursor);
             Voice v = score.measures.get(snap.measure).staves.get(snap.staff).voices[snap.voice];
@@ -415,8 +462,14 @@ public final class EditorState {
 
     /** Turns triplets on or off. The selected value becomes the triplet's unit (triplet eighths, say). */
     public void setTriplet(boolean on) {
-        triplet = on;
-        tripletUnit = on ? durType : -1;
+        setTuplet(on ? 3 : 0);
+    }
+
+    /** Turns tuplets on (2 = duplet ... 6 = sextuplet) or off (0); the selected value becomes the unit. */
+    public void setTuplet(int actual) {
+        triplet = actual > 1;
+        if (triplet) tupletActual = actual;
+        tripletUnit = triplet ? durType : -1;
     }
 
     public void setDuration(int type) {
@@ -425,9 +478,11 @@ public final class EditorState {
         if (!inputMode) applyDurationToSelection();
     }
 
+    /** The dot button: no dot, one dot, two dots (a double dot is not offered on 64ths). */
     public void toggleDot() {
-        dots = dots == 1 ? 0 : 1;
+        dots = (dots + 1) % 3;
         if (durType == Duration.MAX_TYPE) dots = 0;
+        if (dots == 2 && durType >= Duration.N64) dots = 0;
         if (!inputMode) applyDurationToSelection();
     }
 
@@ -443,6 +498,15 @@ public final class EditorState {
     // ------------------------------------------------------------------ modifications on selection
 
     public void deleteSelection() {
+        Chord gr = selectedGrace();
+        if (gr != null) {
+            checkpoint();
+            ((Chord) selectedChordRest()).graces.remove(gr);
+            selGrace = -1;
+            graceAwaitingPitch = false;
+            changed();
+            return;
+        }
         if (selKind == SEL_RANGE) {
             checkpoint();
             ScoreEdit.clearRange(score, rangeM1, rangeM2, rangeS1, rangeS2);
@@ -481,6 +545,14 @@ public final class EditorState {
         if (!(cr instanceof Chord)) return;
         checkpoint();
         Chord c = (Chord) cr;
+        Chord gr = selectedGrace();
+        if (gr != null) {
+            for (Note n : gr.notes) ScoreEdit.transposeNote(score, selPos.measure, n, semis);
+            gr.sortNotes();
+            graceAwaitingPitch = false;
+            changed();
+            return;
+        }
         if (selKind == SEL_NOTE) {
             Note n = selectedNote();
             int target = n.pitch + semis;
@@ -495,13 +567,221 @@ public final class EditorState {
         changed();
     }
 
+    // ------------------------------------------------------------------ slurs and hairpins
+
+    /** Note input: a slur (S) or hairpin (&lt; &gt;) is open and follows the entered notes, as in MuseScore. */
+    public boolean slurOpen;
+    public int hairpinOpen;
+    private Pos slurStartPos, hairpinStartPos;
+
+    private int globalTick(Pos p) {
+        return Syllables.globalTick(score, p.measure, p.tick);
+    }
+
+    private Pos posAt(int global, Pos like) {
+        int[] mt = Spanners.posOf(score, global);
+        return new Pos(mt[0], like.staff, like.voice, mt[1]);
+    }
+
+    private void followLines(Pos at) {
+        ChordRest e = ScoreEdit.elementAt(score, at);
+        if (e == null) return;
+        if (slurOpen && slurStartPos != null && e instanceof Chord) {
+            ChordRest st = ScoreEdit.elementAt(score, slurStartPos);
+            int d = globalTick(at) - globalTick(slurStartPos);
+            if (st instanceof Chord && d > 0) st.slurTicks = d;
+        }
+        if (hairpinOpen != 0 && hairpinStartPos != null) {
+            ChordRest st = ScoreEdit.elementAt(score, hairpinStartPos);
+            int d = globalTick(at) + e.ticks() - globalTick(hairpinStartPos);
+            if (st != null && d > 0) {
+                st.hairpin = hairpinOpen;
+                st.hairpinTicks = d;
+            }
+        }
+    }
+
+    /** First and last chord (or element, with anyElement) of the selected range, in its first staff. */
+    private Pos[] rangeEnds(boolean anyElement) {
+        Pos first = null, last = null;
+        for (int m = rangeM1; m <= rangeM2; m++) {
+            Voice v = score.measures.get(m).staves.get(rangeS1).voices[0];
+            int[] st = v.starts();
+            for (int i = 0; i < v.items.size(); i++) {
+                if (!anyElement && !(v.items.get(i) instanceof Chord)) continue;
+                Pos p = new Pos(m, rangeS1, 0, st[i]);
+                if (first == null) first = p;
+                last = p;
+            }
+        }
+        return new Pos[]{first, last};
+    }
+
+    /**
+     * S (MuseScore): in note input, starts a slur on the note just entered that follows the next
+     * notes, or ends it; on a selected note, adds a slur to the next note, or extends it by one note;
+     * on a range, a slur over the range.
+     */
+    public boolean slur() {
+        if (inputMode) {
+            if (slurOpen) {
+                slurOpen = false;
+                return true;
+            }
+            Pos at = lastEntered != null ? lastEntered : selPos;
+            if (at == null || !(ScoreEdit.elementAt(score, at) instanceof Chord)) return false;
+            slurStartPos = at.copy();
+            slurOpen = true;
+            return true;
+        }
+        if (selKind == SEL_RANGE) {
+            Pos[] ends = rangeEnds(false);
+            if (ends[0] == null || ends[1] == null || globalTick(ends[1]) <= globalTick(ends[0])) return false;
+            checkpoint();
+            ScoreEdit.elementAt(score, ends[0]).slurTicks = globalTick(ends[1]) - globalTick(ends[0]);
+            changed();
+            return true;
+        }
+        ChordRest cr = selectedChordRest();
+        if (!(cr instanceof Chord)) return false;
+        Pos end = cr.slurTicks > 0 ? posAt(globalTick(selPos) + cr.slurTicks, selPos) : selPos;
+        Pos nx = lyricNextChordPos(end);
+        if (nx == null) return false;
+        checkpoint();
+        cr.slurTicks = globalTick(nx) - globalTick(selPos);
+        changed();
+        return true;
+    }
+
+    /**
+     * &lt; and &gt; (MuseScore): a crescendo or diminuendo hairpin. In note input it starts on the
+     * element just entered and follows the next ones until pressed again; on a selected note it
+     * reaches over the next one, and again extends it by one; on a range it covers the range.
+     */
+    public boolean hairpin(int kind) {
+        if (inputMode) {
+            if (hairpinOpen == kind) {
+                hairpinOpen = 0;
+                return true;
+            }
+            Pos at = lastEntered != null ? lastEntered : selPos;
+            ChordRest cr = at == null ? null : ScoreEdit.elementAt(score, at);
+            if (cr == null) return false;
+            checkpoint();
+            cr.hairpin = kind;
+            cr.hairpinTicks = cr.ticks();
+            hairpinStartPos = at.copy();
+            hairpinOpen = kind;
+            changed();
+            return true;
+        }
+        if (selKind == SEL_RANGE) {
+            Pos[] ends = rangeEnds(true);
+            if (ends[0] == null) return false;
+            checkpoint();
+            ChordRest first = ScoreEdit.elementAt(score, ends[0]);
+            first.hairpin = kind;
+            first.hairpinTicks = Syllables.globalTick(score, rangeM2, score.measures.get(rangeM2).ticks()) - globalTick(ends[0]);
+            changed();
+            return true;
+        }
+        ChordRest cr = selectedChordRest();
+        if (cr == null) return false;
+        int start = globalTick(selPos);
+        int end = cr.hairpin == kind && cr.hairpinTicks > 0 ? start + cr.hairpinTicks : start + cr.ticks();
+        Pos np = posAt(end, selPos);
+        ChordRest nx = ScoreEdit.elementAt(score, np);
+        if (nx == null) return false;
+        checkpoint();
+        cr.hairpin = kind;
+        cr.hairpinTicks = end + nx.ticks() - start;
+        changed();
+        return true;
+    }
+
+    /** Removes the slurs and hairpins that start on the selection. */
+    public boolean removeLines() {
+        List<ChordRest> ts = targets();
+        boolean any = false;
+        for (ChordRest cr : ts) if (cr.slurTicks > 0 || cr.hairpin != 0) any = true;
+        if (!any) return false;
+        checkpoint();
+        for (ChordRest cr : ts) {
+            cr.slurTicks = 0;
+            cr.hairpin = 0;
+            cr.hairpinTicks = 0;
+        }
+        changed();
+        return true;
+    }
+
+    // ------------------------------------------------------------------ grace notes
+
+    /** The selected grace chord, or null. */
+    public Chord selectedGrace() {
+        if (selGrace < 0 || selKind != SEL_NOTE) return null;
+        ChordRest cr = selectedChordRest();
+        if (!(cr instanceof Chord) || selGrace >= ((Chord) cr).graces.size()) return null;
+        return ((Chord) cr).graces.get(selGrace);
+    }
+
+    /** Selects a grace chord of the chord at p (a tap on it in the score). */
+    public void selectGrace(Pos p, int index) {
+        selKind = SEL_NOTE;
+        selPos = p.copy();
+        selNote = -1;
+        selGrace = index;
+        graceAwaitingPitch = false;
+    }
+
+    /**
+     * Adds a grace note before the selected chord (in note input: the note just entered), at the
+     * pitch of the selected note, and selects it; the next piano key or letter sets its pitch, as
+     * in MuseScore, where grace notes are added to an existing note. Kind is ACCIACCATURA or
+     * APPOGGIATURA; type is EIGHTH or N16.
+     */
+    public boolean addGrace(int kind, int type) {
+        Pos at = selPos != null && selKind != SEL_RANGE ? selPos : lastEntered;
+        ChordRest cr = at == null ? null : ScoreEdit.elementAt(score, at);
+        if (!(cr instanceof Chord)) return false;
+        Chord c = (Chord) cr;
+        Note main = selectedGrace() == null ? selectedNote() : null;
+        if (main == null) main = c.top();
+        checkpoint();
+        c.graces.add(Chord.grace(kind, type, new Note(main.pitch, main.tpc)));
+        selKind = SEL_NOTE;
+        selPos = at.copy();
+        selNote = -1;
+        selGrace = c.graces.size() - 1;
+        graceAwaitingPitch = true;
+        changed();
+        return true;
+    }
+
+    private int setGracePitch(int pitch, int forcedAlter) {
+        Chord gr = selectedGrace();
+        int key = score.keyAt(selPos.measure);
+        int tpc = Pitch.spell(pitch, key);
+        if (forcedAlter != Integer.MIN_VALUE) {
+            int t = Pitch.spellWithAlter(pitch, forcedAlter);
+            if (Pitch.validTpc(t)) tpc = t;
+        }
+        checkpoint();
+        gr.notes.clear();
+        gr.notes.add(new Note(pitch, tpc));
+        graceAwaitingPitch = false;
+        changed();
+        return pitch;
+    }
+
     /** Respells the selected note (or every note of the selected chord) enharmonically, as MuseScore's J. */
     public boolean respell() {
         ChordRest cr = selectedChordRest();
         if (!(cr instanceof Chord) || selKind == SEL_RANGE) return false;
         checkpoint();
         Note sel = selectedNote();
-        for (Note n : ((Chord) cr).notes) {
+        Chord gr = selectedGrace();
+        for (Note n : (gr != null ? gr : (Chord) cr).notes) {
             if (sel != null && n != sel) continue;
             n.tpc = Pitch.nextSpelling(n.tpc);
             n.forceAccidental = false;
@@ -664,6 +944,8 @@ public final class EditorState {
 
     /** Starts typing the lyric of the chord at p. An existing lyric is continued at its end. */
     public boolean beginLyric(Pos p) {
+        selGrace = -1;
+        graceAwaitingPitch = false;
         if (p == null) return false;
         ChordRest cr = ScoreEdit.elementAt(score, p);
         if (!(cr instanceof Chord)) return false;
@@ -694,6 +976,8 @@ public final class EditorState {
      * lyric entry is only left on purpose (see {@link #endLyric()}), never by running out of notes.
      */
     private boolean lyricMove(boolean forward) {
+        selGrace = -1;
+        graceAwaitingPitch = false;
         if (!lyricEdit) return false;
         Pos p = selPos;
         ChordRest target = null;
@@ -905,6 +1189,8 @@ public final class EditorState {
 
     /** Moves the selection to the next chord (used to type lyrics syllable by syllable). */
     public boolean selectNextChord() {
+        selGrace = -1;
+        graceAwaitingPitch = false;
         if (selPos == null) return false;
         Pos p = ScoreEdit.next(score, selPos);
         while (p != null) {

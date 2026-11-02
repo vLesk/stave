@@ -688,6 +688,8 @@ public final class ScoreView extends View {
             state.clearSelection();
         } else if (h.cr == null) {
             state.selectMeasure(h.pos.measure, h.pos.staff);
+        } else if (h.grace >= 0) {
+            state.selectGrace(h.pos, h.grace);
         } else {
             state.selectNote(h.pos, h.noteIdx);
         }

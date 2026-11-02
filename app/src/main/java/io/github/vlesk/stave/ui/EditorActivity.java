@@ -56,6 +56,7 @@ import io.github.vlesk.stave.model.Pitch;
 import io.github.vlesk.stave.model.Pos;
 import io.github.vlesk.stave.model.Score;
 import io.github.vlesk.stave.model.ScoreEdit;
+import io.github.vlesk.stave.model.Tuplet;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -100,7 +101,7 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
     private Ui.Snackbar snack;
     private final TextView[] durBtns = new TextView[6];
     private static final int[] DUR_TYPES = {Duration.N32, Duration.N16, Duration.EIGHTH, Duration.QUARTER, Duration.HALF, Duration.WHOLE};
-    private TextView dotBtn, tripletBtn;
+    private TextView dotBtn, tripletBtn, slurBtn, crescBtn, dimBtn;
     private final TextView[] voiceBtns = new TextView[4];
     private FrameLayout sheetHost;
     private PaletteView palette;
@@ -358,8 +359,8 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
         piano = new PianoView(this, t);
         piano.setListener(new PianoView.Listener() {
             @Override
-            public void onKey(int pitch) {
-                pianoKey(pitch);
+            public void onKey(int pitch, boolean withHeldKeys) {
+                pianoKey(pitch, withHeldKeys);
             }
         });
         pianoRow.addView(piano, Ui.lin(0, -1, 1f));
@@ -918,13 +919,78 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
             @Override
             public void onClick(View v) {
                 if (st == null) return;
-                st.setTriplet(!st.triplet);
+                st.setTuplet(st.triplet ? 0 : st.tupletActual);
                 refresh();
+            }
+        });
+        // long press: duplet, triplet, quadruplet, quintuplet, sextuplet
+        tripletBtn.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                if (st == null) return false;
+                tupletPopup(v);
+                return true;
             }
         });
         tripletBtn.setLayoutParams(new LinearLayout.LayoutParams(t.dp(48), t.dp(44)));
         mods.addView(tripletBtn);
         row.addView(mods);
+    }
+
+    /** Slur (0) or hairpin: in note input it opens or closes; on a selection it adds or extends. */
+    void lineAction(int kind) {
+        if (st == null) return;
+        boolean ok = kind == 0 ? st.slur() : st.hairpin(kind);
+        if (!ok) {
+            snack.show(st.inputMode ? "Enter a note first" : getString(R.string.nothing_selected));
+            return;
+        }
+        refresh();
+    }
+
+    private int graceKind = Chord.ACCIACCATURA, graceType = Duration.EIGHTH;
+
+    void addGrace(int kind, int type) {
+        if (st == null) return;
+        graceKind = kind;
+        graceType = type;
+        if (!st.addGrace(kind, type)) {
+            snack.show(getString(R.string.nothing_selected));
+            return;
+        }
+        refresh();
+    }
+
+    private void gracePopup(View anchor) {
+        List<Ui.PopupItem> items = new ArrayList<Ui.PopupItem>();
+        String[] labels = {"acc.", "app.", "app. 16th"};
+        String[] desc = {"Acciaccatura (short, slashed)", "Appoggiatura", "Appoggiatura, 16th"};
+        final int[][] kinds = {{Chord.ACCIACCATURA, Duration.EIGHTH}, {Chord.APPOGGIATURA, Duration.EIGHTH}, {Chord.APPOGGIATURA, Duration.N16}};
+        for (int i = 0; i < kinds.length; i++) {
+            final int[] k = kinds[i];
+            items.add(new Ui.PopupItem(labels[i], false, desc[i], graceKind == k[0] && graceType == k[1], new Runnable() {
+                @Override
+                public void run() {
+                    addGrace(k[0], k[1]);
+                }
+            }));
+        }
+        Ui.popupGroup(anchor, t, items);
+    }
+
+    private void tupletPopup(View anchor) {
+        List<Ui.PopupItem> items = new ArrayList<Ui.PopupItem>();
+        for (final int n : Tuplet.OFFERED) {
+            String desc = Tuplet.name(n) + " (" + n + ":" + Tuplet.normalFor(n) + ")";
+            items.add(new Ui.PopupItem(Sym.str(Sym.tuplet0 + n), true, desc, st.triplet && st.tupletActual == n, new Runnable() {
+                @Override
+                public void run() {
+                    st.setTuplet(st.triplet && st.tupletActual == n ? 0 : n);
+                    refresh();
+                }
+            }));
+        }
+        Ui.popupGroup(anchor, t, items);
     }
 
     private void buildInputTools(LinearLayout row) {
@@ -946,6 +1012,43 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
                 followCursor();
             }
         }), getString(R.string.tie)));
+        // grace note: added before the note just entered (or the selected one); its pitch comes next
+        TextView grace = Ui.glyphButton(this, t, Sym.str(Sym.metNote8thUp), true, 18, "Grace note", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                addGrace(graceKind, graceType);
+            }
+        });
+        grace.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                gracePopup(v);
+                return true;
+            }
+        });
+        row.addView(Ui.labeled(this, t, grace, "Grace"));
+        // slur and hairpins follow the notes entered after them until tapped again (MuseScore S, <, >)
+        slurBtn = Ui.glyphButton(this, t, "⌒", false, 24, "Slur", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                lineAction(0);
+            }
+        });
+        row.addView(Ui.labeled(this, t, slurBtn, "Slur"));
+        crescBtn = Ui.glyphButton(this, t, "<", false, 22, "Crescendo hairpin", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                lineAction(ChordRest.CRESCENDO);
+            }
+        });
+        row.addView(Ui.labeled(this, t, crescBtn, "cresc."));
+        dimBtn = Ui.glyphButton(this, t, ">", false, 22, "Diminuendo hairpin", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                lineAction(ChordRest.DIMINUENDO);
+            }
+        });
+        row.addView(Ui.labeled(this, t, dimBtn, "dim."));
         int[] acc = {Sym.accidentalFlat, Sym.accidentalNatural, Sym.accidentalSharp};
         int[] accDesc = {R.string.flat, R.string.natural, R.string.sharp};
         String[] accLabel = {"♭", "♮", "♯"};
@@ -1065,7 +1168,14 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
         redoBtn.setAlpha(st.canRedo() ? 1f : 0.38f);
         for (int i = 0; i < durBtns.length; i++) Ui.setGroupSelected(t, durBtns[i], st.durType == DUR_TYPES[i]);
         Ui.setGroupSelected(t, dotBtn, st.dots > 0);
+        dotBtn.setText(st.dots == 2 ? Sym.str(Sym.metAugmentationDot) + Sym.str(Sym.metAugmentationDot) : Sym.str(Sym.metAugmentationDot));
+        dotBtn.setContentDescription(st.dots == 2 ? "Double dot" : getString(R.string.dot));
         Ui.setGroupSelected(t, tripletBtn, st.triplet);
+        Ui.setGroupSelected(t, slurBtn, st.slurOpen);
+        Ui.setGroupSelected(t, crescBtn, st.hairpinOpen == ChordRest.CRESCENDO);
+        Ui.setGroupSelected(t, dimBtn, st.hairpinOpen == ChordRest.DIMINUENDO);
+        tripletBtn.setText(Sym.str(Sym.tuplet0 + st.tupletActual));
+        tripletBtn.setContentDescription(Tuplet.name(st.tupletActual) + " (long press for other tuplets)");
         for (int i = 0; i < 4; i++) {
             Ui.setGroupSelected(t, voiceBtns[i], st.voice == i);
             if (st.voice != i) voiceBtns[i].setTextColor(t.voice[i]);
@@ -1108,6 +1218,7 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
     }
 
     private String statusText() {
+        if (st.graceAwaitingPitch) return "Grace note \u00b7 tap its pitch on the piano (or ↑ ↓)";
         if (st.lyricEdit) return "Lyric entry \u00b7 Space or - : next note \u00b7 _ : extender line";
         StringBuilder sb = new StringBuilder();
         if (st.inputMode && st.cursor != null) {
@@ -1115,7 +1226,9 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
             sb.append("m. ").append(st.score.measureNumber(Math.min(st.cursor.measure, st.score.measures.size() - 1)));
             sb.append(" · ").append(getString(R.string.voice, st.voice + 1));
             sb.append(" · ").append(Duration.label(st.durType, st.dots));
-            if (st.triplet) sb.append(" · triplet of ").append(Duration.label(st.tripletUnit >= 0 ? st.tripletUnit : st.durType, 0).toLowerCase(java.util.Locale.ROOT)).append("s");
+            if (st.slurOpen) sb.append(" · slur");
+            if (st.hairpinOpen != 0) sb.append(st.hairpinOpen == ChordRest.CRESCENDO ? " · cresc." : " · dim.");
+            if (st.triplet) sb.append(" · ").append(Tuplet.name(st.tupletActual)).append(" of ").append(Duration.label(st.tripletUnit >= 0 ? st.tripletUnit : st.durType, 0).toLowerCase(java.util.Locale.ROOT)).append("s");
             return sb.toString();
         }
         if (st.selKind == EditorState.SEL_RANGE) {
@@ -1167,14 +1280,14 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
 
     // ------------------------------------------------------------------ input actions
 
-    private void pianoKey(int pitch) {
+    private void pianoKey(int pitch, boolean withHeldKeys) {
         if (st == null) return;
         if (!st.inputMode) {
             // outside note input the keyboard re-pitches the selected note (or just plays)
             synth.play(pitch);
             return;
         }
-        int p = st.enterPitch(pitch, Integer.MIN_VALUE);
+        int p = st.enterPianoKey(pitch, withHeldKeys);
         synth.play(p);
         refresh();
         followCursor();
@@ -1614,6 +1727,47 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
                     }
                 }));
             }
+            PaletteView.Category lines = new PaletteView.Category("Lines");
+            lines.add(new PaletteView.Cell("⌒", false, "Slur", "Slur to the next note (again: one note longer)", new Runnable() {
+                @Override
+                public void run() {
+                    a.lineAction(0);
+                }
+            }));
+            lines.add(new PaletteView.Cell("<", false, "cresc.", "Crescendo hairpin (again: one note longer)", new Runnable() {
+                @Override
+                public void run() {
+                    a.lineAction(ChordRest.CRESCENDO);
+                }
+            }));
+            lines.add(new PaletteView.Cell(">", false, "dim.", "Diminuendo hairpin (again: one note longer)", new Runnable() {
+                @Override
+                public void run() {
+                    a.lineAction(ChordRest.DIMINUENDO);
+                }
+            }));
+            lines.add(new PaletteView.Cell("✕", false, "Remove", "Remove the slur and hairpin starting on the selection", new Runnable() {
+                @Override
+                public void run() {
+                    if (!a.st.removeLines()) a.toast("No slur or hairpin starts here");
+                }
+            }));
+            cats.add(lines);
+            PaletteView.Category graces = new PaletteView.Category("Grace notes");
+            String[] gl = {"acc.", "app.", "app. 16th"};
+            String[] gd = {"Acciaccatura (short, slashed): before the selected note", "Appoggiatura: before the selected note",
+                    "Appoggiatura, 16th: before the selected note"};
+            final int[][] gk = {{Chord.ACCIACCATURA, Duration.EIGHTH}, {Chord.APPOGGIATURA, Duration.EIGHTH}, {Chord.APPOGGIATURA, Duration.N16}};
+            for (int i = 0; i < gk.length; i++) {
+                final int[] k = gk[i];
+                graces.add(new PaletteView.Cell(gl[i], false, gl[i], gd[i], new Runnable() {
+                    @Override
+                    public void run() {
+                        a.addGrace(k[0], k[1]);
+                    }
+                }));
+            }
+            cats.add(graces);
             accs.add(new PaletteView.Cell("⇆", false, "Respell", a.getString(R.string.respell), new Runnable() {
                 @Override
                 public void run() {
@@ -2187,7 +2341,8 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
         String s = "N — note input on/off\n"
                 + "A–G — enter note (Shift: add to chord)\n"
                 + "1–7 — 64th … whole (as in MuseScore), . — dot\n"
-                + "0 — rest,  + — tie,  T — triplet\n"
+                + "S — slur,  < > — crescendo / diminuendo (in note input: until pressed again)\n"
+                + "0 — rest,  + — tie,  T — triplet,  Ctrl+2–6 — duplet … sextuplet,  . — dot (twice: double dot)\n"
                 + "↑ ↓ — semitone,  Ctrl+↑ ↓ — octave,  J — respell (C♯ ⇄ D♭)\n"
                 + "← → — previous / next\n"
                 + "Del / Backspace — delete\n"
@@ -2212,6 +2367,10 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
         boolean handled = true;
         if (ctrl && alt && keyCode >= KeyEvent.KEYCODE_1 && keyCode <= KeyEvent.KEYCODE_4) {
             st.setVoice(keyCode - KeyEvent.KEYCODE_1);
+        } else if (ctrl && !alt && keyCode >= KeyEvent.KEYCODE_2 && keyCode <= KeyEvent.KEYCODE_6) {
+            // MuseScore: Ctrl+2 ... Ctrl+9 for tuplets
+            int n = 2 + (keyCode - KeyEvent.KEYCODE_2);
+            st.setTuplet(st.triplet && st.tupletActual == n ? 0 : n);
         } else if (ctrl) {
             switch (keyCode) {
                 case KeyEvent.KEYCODE_Z:
@@ -2267,7 +2426,8 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
                         setInputMode(!st.inputMode);
                         break;
                     case KeyEvent.KEYCODE_PERIOD:
-                        st.toggleDot();
+                        if (shift) lineAction(ChordRest.DIMINUENDO); // '>' on most layouts
+                        else st.toggleDot();
                         break;
                     case KeyEvent.KEYCODE_0:
                         if (st.inputMode) st.enterRest();
@@ -2281,10 +2441,13 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
                         followCursor();
                         break;
                     case KeyEvent.KEYCODE_T:
-                        st.setTriplet(!st.triplet);
+                        st.setTuplet(st.triplet ? 0 : st.tupletActual);
                         break;
                     case KeyEvent.KEYCODE_J:
                         st.respell();
+                        break;
+                    case KeyEvent.KEYCODE_S:
+                        lineAction(0);
                         break;
                     case KeyEvent.KEYCODE_DPAD_UP:
                         st.transpose(1);
@@ -2312,7 +2475,11 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
                         else st.clearSelection();
                         break;
                     default:
-                        handled = false;
+                        // < and > (MuseScore): crescendo and diminuendo hairpins, whatever the layout's keys
+                        int uc = e.getUnicodeChar();
+                        if (uc == '<') lineAction(ChordRest.CRESCENDO);
+                        else if (uc == '>') lineAction(ChordRest.DIMINUENDO);
+                        else handled = false;
                 }
             }
         }

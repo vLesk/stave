@@ -413,13 +413,13 @@ public class ModelTests {
             es.toggleDot();
             es.enterPitch(64, Integer.MIN_VALUE);
             es.setDuration(Duration.EIGHTH);
-            es.toggleDot();
+            while (es.dots != 0) es.toggleDot();
             es.enterPitch(66, Integer.MIN_VALUE);
             es.triplet = true;
             int[][] rhythm = {{Duration.N16, 1}, {Duration.N32, 0}, {Duration.EIGHTH, 0}, {Duration.N16, 1}, {Duration.N32, 0}};
             for (int[] rh : rhythm) {
                 es.setDuration(rh[0]);
-                if ((es.dots > 0) != (rh[1] > 0)) es.toggleDot();
+                while (es.dots != rh[1]) es.toggleDot();
                 es.enterPitch(68, Integer.MIN_VALUE);
             }
             Voice tv = es.score.measures.get(0).staves.get(0).voices[0];
@@ -460,6 +460,199 @@ public class ModelTests {
             check(got.toString().equals("0:320 320:160 480:480 960:480 "), "quarter-eighth triplet then quarters: " + got);
             check(tv.items.get(0).tuplet == tv.items.get(1).tuplet && tv.items.get(0).tuplet.baseType == Duration.EIGHTH,
                     "both in one triplet of eighths");
+        }
+
+        // keys pressed together on the piano make one chord; keys pressed one after another, separate notes
+        {
+            io.github.vlesk.stave.edit.EditorState es = new io.github.vlesk.stave.edit.EditorState(pianoScore());
+            es.startInput();
+            es.setDuration(Duration.QUARTER);
+            es.enterPianoKey(60, false);
+            es.enterPianoKey(64, true);
+            es.enterPianoKey(67, true);
+            es.enterPianoKey(62, false);
+            Voice pv = es.score.measures.get(0).staves.get(0).voices[0];
+            check(pv.items.get(0) instanceof Chord && ((Chord) pv.items.get(0)).notes.size() == 3, "three keys held together: one chord");
+            check(pv.items.get(1) instanceof Chord && ((Chord) pv.items.get(1)).notes.size() == 1 && es.cursor.tick == 960, "then a single note");
+            check(!es.chordMode, "chord mode is left as it was");
+        }
+
+        // grace notes: added to the note just entered, pitch from the next key; selected, moved, deleted;
+        // drawn small before the note; saved and read in both formats; played before the note
+        {
+            io.github.vlesk.stave.edit.EditorState es = new io.github.vlesk.stave.edit.EditorState(pianoScore());
+            es.startInput();
+            es.setDuration(Duration.QUARTER);
+            es.enterPitch(67, Integer.MIN_VALUE);
+            check(es.addGrace(Chord.ACCIACCATURA, Duration.EIGHTH) && es.graceAwaitingPitch, "grace added, waiting for its pitch");
+            es.enterPianoKey(69, false);
+            Chord main = (Chord) es.score.measures.get(0).staves.get(0).voices[0].items.get(0);
+            check(main.graces.size() == 1 && main.graces.get(0).notes.get(0).pitch == 69 && !es.graceAwaitingPitch, "the key set the grace's pitch");
+            es.enterPianoKey(72, false);
+            check(es.score.measures.get(0).staves.get(0).voices[0].items.get(1) instanceof Chord && es.cursor.tick == 960, "the next key enters a note again");
+            es.selectGrace(new Pos(0, 0, 0, 0), 0);
+            es.transpose(-2);
+            check(main.graces.get(0).notes.get(0).pitch == 67, "a selected grace moves with the arrows");
+            es.selectNote(new Pos(0, 0, 0, 0), 0);
+            es.addGrace(Chord.APPOGGIATURA, Duration.N16);
+            es.enterPitch(65, Integer.MIN_VALUE);
+            check(main.graces.size() == 2 && main.graces.get(1).type == Duration.N16 && main.graces.get(1).notes.get(0).pitch == 65, "second grace, closest to the note");
+            // layout: small noteheads left of the note, hits for tapping
+            DisplayList gdl = Layout.layout(es.score, new TextMetrics() {
+                public float width(String t, int font, float sizeSp) {
+                    return t.length() * sizeSp * 0.5f;
+                }
+            }, new Layout.Options());
+            int smallHeads = 0, graceHits = 0;
+            for (DisplayList.Item it : gdl.items) {
+                if (it.kind == DisplayList.GLYPH && it.glyph == io.github.vlesk.stave.engrave.Sym.noteheadBlack && it.w < 1f && it.x < gdl.xAt(0, 0)) smallHeads++;
+            }
+            for (DisplayList.Hit h : gdl.hits) if (h.grace >= 0) graceHits++;
+            check(smallHeads == 2 && graceHits == 2, "two grace heads before the note: " + smallHeads + " hits " + graceHits);
+            // files
+            String gx = MscxWriter.write(es.score);
+            check(gx.contains("<acciaccatura/>") && gx.contains("<grace16/>"), "mscx grace tags");
+            Chord gm = (Chord) MscxReader.read(gx.getBytes("UTF-8")).score.measures.get(0).staves.get(0).voices[0].items.get(0);
+            check(gm.graces.size() == 2 && gm.graces.get(0).graceKind == Chord.ACCIACCATURA && gm.graces.get(1).type == Duration.N16, "mscx graces read back");
+            String gxml = MusicXmlWriter.write(es.score);
+            check(gxml.contains("<grace slash=\"yes\"/>"), "musicxml grace");
+            Chord gmx = (Chord) MusicXmlReader.read(gxml.getBytes("UTF-8")).score.measures.get(0).staves.get(0).voices[0].items.get(0);
+            check(gmx.graces.size() == 2 && gmx.graces.get(0).graceKind == Chord.ACCIACCATURA, "musicxml graces read back");
+            // playback: graces sound first, the note after them
+            Timeline gtl = Timeline.build(es.score);
+            int first67 = -1, main67 = -1;
+            for (Timeline.NoteEvent e : gtl.events) {
+                if (e.track == 0 && e.pitch == 67 && first67 < 0) first67 = e.startTick;
+                if (e.track == 0 && e.pitch == 67) main67 = e.startTick;
+            }
+            check(first67 == 0 && main67 > 0, "grace played first, then the note: " + first67 + " " + main67);
+            // delete the selected grace
+            es.selectGrace(new Pos(0, 0, 0, 0), 1);
+            es.deleteSelection();
+            check(main.graces.size() == 1, "grace deleted");
+        }
+
+        // slurs and hairpins: in note input they follow the entered notes (MuseScore S, <, >); on a selection
+        // they reach the next note and grow by one each time; drawn, saved, read back and played
+        {
+            io.github.vlesk.stave.edit.EditorState es = new io.github.vlesk.stave.edit.EditorState(pianoScore());
+            es.startInput();
+            es.setDuration(Duration.QUARTER);
+            es.enterPitch(60, Integer.MIN_VALUE);
+            check(es.slur() && es.slurOpen, "S opens a slur on the entered note");
+            check(es.hairpin(ChordRest.CRESCENDO) && es.hairpinOpen == ChordRest.CRESCENDO, "< opens a crescendo");
+            es.enterPitch(62, Integer.MIN_VALUE);
+            es.enterPitch(64, Integer.MIN_VALUE);
+            es.slur();
+            es.hairpin(ChordRest.CRESCENDO);
+            es.enterPitch(65, Integer.MIN_VALUE);
+            ChordRest c0 = es.score.measures.get(0).staves.get(0).voices[0].items.get(0);
+            check(c0.slurTicks == 960, "the slur followed two notes: " + c0.slurTicks);
+            check(c0.hairpin == ChordRest.CRESCENDO && c0.hairpinTicks == 1440, "the crescendo covers three notes: " + c0.hairpinTicks);
+            es.enterPitch(67, Integer.MIN_VALUE);
+            es.enterPitch(69, Integer.MIN_VALUE);
+            es.enterPitch(71, Integer.MIN_VALUE);
+            es.stopInput();
+            // on a selection: next note, then one more each time; across the barline
+            es.selectNote(new Pos(0, 0, 0, 1440), -1);
+            es.slur();
+            es.slur();
+            ChordRest c3 = es.score.measures.get(0).staves.get(0).voices[0].items.get(3);
+            check(c3.slurTicks == 960, "slur over three notes into the next bar: " + c3.slurTicks);
+            es.selectNote(new Pos(1, 0, 0, 0), -1);
+            es.hairpin(ChordRest.DIMINUENDO);
+            ChordRest c4 = es.score.measures.get(1).staves.get(0).voices[0].items.get(0);
+            check(c4.hairpin == ChordRest.DIMINUENDO && c4.hairpinTicks == 960, "diminuendo over this and the next note");
+            List<io.github.vlesk.stave.model.Spanners.Span> spans = io.github.vlesk.stave.model.Spanners.all(es.score);
+            check(spans.size() == 4, "four lines: " + spans.size());
+            // layout: a curve per slur, two lines per hairpin
+            DisplayList ldl = Layout.layout(es.score, new TextMetrics() {
+                public float width(String t, int font, float sizeSp) {
+                    return t.length() * sizeSp * 0.5f;
+                }
+            }, new Layout.Options());
+            int polys = 0, slanted = 0;
+            for (DisplayList.Item it : ldl.items) {
+                if (it.kind == DisplayList.POLY && it.owner != null && it.owner.slurTicks > 0) polys++;
+                if (it.kind == DisplayList.LINE && it.owner != null && it.owner.hairpin != 0 && it.y != it.y2 && it.x != it.x2) slanted++;
+            }
+            check(polys == 2 && slanted == 4, "slur curves and hairpin wedges drawn: " + polys + " " + slanted);
+            // files
+            String lx = MscxWriter.write(es.score);
+            check(lx.contains("<Spanner type=\"Slur\">") && lx.contains("<Spanner type=\"HairPin\">") && lx.contains("<prev>"), "mscx spanners");
+            Score lb = MscxReader.read(lx.getBytes("UTF-8")).score;
+            check(MscxWriter.write(lb).equals(lx), "mscx lines round trip");
+            ChordRest lb3 = lb.measures.get(0).staves.get(0).voices[0].items.get(3);
+            check(lb3.slurTicks == 960 && lb.measures.get(1).staves.get(0).voices[0].items.get(0).hairpinTicks == 960, "mscx lines read back");
+            String lxml = MusicXmlWriter.write(es.score);
+            check(lxml.contains("<slur type=\"start\"") && lxml.contains("<wedge type=\"crescendo\"") && lxml.contains("<wedge type=\"stop\""), "musicxml lines");
+            Score lbx = MusicXmlReader.read(lxml.getBytes("UTF-8")).score;
+            ChordRest x0 = lbx.measures.get(0).staves.get(0).voices[0].items.get(0);
+            ChordRest x4 = lbx.measures.get(1).staves.get(0).voices[0].items.get(0);
+            check(x0.slurTicks == 960 && x0.hairpin == ChordRest.CRESCENDO && x0.hairpinTicks == 1440 && x4.hairpin == ChordRest.DIMINUENDO
+                    && x4.hairpinTicks == 960, "musicxml lines read back: " + x0.slurTicks + " " + x0.hairpinTicks + " " + x4.hairpinTicks);
+            // playback: legato under the slur, louder through the crescendo
+            Timeline ltl = Timeline.build(es.score);
+            int v0 = -1, v2 = -1, len0 = -1;
+            for (Timeline.NoteEvent e : ltl.events) {
+                if (e.track != 0) continue;
+                if (e.pitch == 60) { v0 = e.velocity; len0 = e.lengthTicks; }
+                if (e.pitch == 64) v2 = e.velocity;
+            }
+            check(v2 > v0 && len0 == 480, "crescendo and legato: " + v0 + " -> " + v2 + ", length " + len0);
+            // remove
+            es.selectNote(new Pos(1, 0, 0, 0), -1);
+            check(es.removeLines() && c4.hairpin == 0, "remove the hairpin");
+        }
+
+        // double dots and tuplets other than triplets, with the dot button and the tuplet popup
+        {
+            List<Part> vp = new ArrayList<Part>();
+            vp.add(Instruments.byId("piano").create());
+            io.github.vlesk.stave.edit.EditorState es = new io.github.vlesk.stave.edit.EditorState(Score.create("T", "", vp, 4, 4, 0, 100, 3));
+            es.startInput();
+            es.setDuration(Duration.QUARTER);
+            es.toggleDot();
+            es.toggleDot();
+            check(es.dots == 2, "the dot button cycles to a double dot");
+            es.enterPitch(60, Integer.MIN_VALUE);
+            es.toggleDot();
+            check(es.dots == 0, "and back to no dot");
+            es.setDuration(Duration.N16);
+            es.enterPitch(62, Integer.MIN_VALUE);
+            Voice v0 = es.score.measures.get(0).staves.get(0).voices[0];
+            check(v0.items.get(0).dots == 2 && v0.items.get(0).ticks() == 840, "double-dotted quarter");
+            check(es.cursor.tick == 960, "after a double-dotted quarter and a 16th: beat 3");
+            // a quintuplet of 16ths on beat 3, a sextuplet of 16ths on beat 4
+            es.setTuplet(5);
+            for (int k = 0; k < 5; k++) es.enterPitch(64 + k, Integer.MIN_VALUE);
+            es.setTuplet(6);
+            for (int k = 0; k < 6; k++) es.enterPitch(60 + k, Integer.MIN_VALUE);
+            check(es.cursor.measure == 1 && es.cursor.tick == 0, "quintuplet and sextuplet fill beats 3 and 4: " + es.cursor);
+            check(v0.totalTicks() == 1920, "bar adds up: " + v0.totalTicks());
+            ChordRest qn = v0.items.get(2), sx = v0.items.get(7);
+            check(qn.tuplet != null && qn.tuplet.actual == 5 && qn.tuplet.normal == 4 && qn.ticks() == 96, "quintuplet 16th = 96 ticks");
+            check(sx.tuplet != null && sx.tuplet.actual == 6 && sx.tuplet.normal == 4 && sx.ticks() == 80, "sextuplet 16th = 80 ticks");
+            // a duplet of eighths in 6/8 and a quadruplet
+            Score six = Score.create("D", "", vp, 6, 8, 0, 100, 2);
+            io.github.vlesk.stave.edit.EditorState e6 = new io.github.vlesk.stave.edit.EditorState(six);
+            e6.startInput();
+            e6.setDuration(Duration.EIGHTH);
+            e6.setTuplet(2);
+            e6.enterPitch(67, Integer.MIN_VALUE);
+            e6.enterPitch(69, Integer.MIN_VALUE);
+            check(e6.cursor.tick == 720 && six.measures.get(0).staves.get(0).voices[0].items.get(0).ticks() == 360, "duplet eighths fill a dotted quarter");
+            e6.setTuplet(4);
+            for (int k = 0; k < 4; k++) e6.enterPitch(60 + k, Integer.MIN_VALUE);
+            check(e6.cursor.measure == 1 && e6.cursor.tick == 0, "quadruplet eighths fill the second dotted quarter: " + e6.cursor);
+            // files keep the ratios
+            Score back = MscxReader.read(MscxWriter.write(es.score).getBytes("UTF-8")).score;
+            ChordRest bq = back.measures.get(0).staves.get(0).voices[0].items.get(2);
+            check(bq.tuplet != null && bq.tuplet.actual == 5 && bq.tuplet.normal == 4 && back.measures.get(0).staves.get(0).voices[0].items.get(0).dots == 2,
+                    "quintuplet and double dot read back");
+            Score backX = MusicXmlReader.read(MusicXmlWriter.write(es.score).getBytes("UTF-8")).score;
+            check(backX.measures.get(0).staves.get(0).voices[0].totalTicks() == 1920
+                    && backX.measures.get(0).staves.get(0).voices[0].items.get(7).tuplet.actual == 6, "musicxml tuplets read back");
         }
 
         // melisma (extender line) and hyphen extension, typed as in MuseScore

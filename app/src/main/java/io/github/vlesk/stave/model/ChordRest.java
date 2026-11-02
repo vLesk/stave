@@ -24,6 +24,14 @@ public abstract class ChordRest {
     public final List<String> articulations = new ArrayList<String>();
     /** Free staff text above this position (expression / technique text). */
     public String staffText;
+    /**
+     * Slur starting here: ticks from this element to the start of the slur's last chord, in the
+     * same staff and voice (MuseScore's tick2 - tick); 0 = no slur.
+     */
+    public int slurTicks;
+    /** Hairpin starting here: CRESCENDO or DIMINUENDO (0 = none), and its length in ticks. */
+    public int hairpin, hairpinTicks;
+    public static final int CRESCENDO = 1, DIMINUENDO = 2;
 
     public int ticks() {
         int t = Duration.ticks(type, dots);
@@ -44,10 +52,14 @@ public abstract class ChordRest {
         o.melisma = melisma;
         o.articulations.addAll(articulations);
         o.staffText = staffText;
+        o.slurTicks = slurTicks;
+        o.hairpin = hairpin;
+        o.hairpinTicks = hairpinTicks;
     }
 
     public boolean hasMarkings() {
-        return dynamic != null || chordSymbol != null || lyric != null || !articulations.isEmpty() || staffText != null;
+        return dynamic != null || chordSymbol != null || lyric != null || !articulations.isEmpty() || staffText != null
+                || slurTicks > 0 || hairpin != 0;
     }
 
     public void clearMarkings() {
@@ -56,6 +68,9 @@ public abstract class ChordRest {
         lyric = null;
         melisma = 0;
         staffText = null;
+        slurTicks = 0;
+        hairpin = 0;
+        hairpinTicks = 0;
         articulations.clear();
     }
 }

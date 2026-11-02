@@ -217,6 +217,11 @@ public final class ScoreEdit {
      * on the next larger one).
      */
     public static Pos enter(Score s, Pos p, Chord template, int type, int dots, boolean triplet, int tripletUnit) {
+        return enter(s, p, template, type, dots, triplet ? 3 : 0, tripletUnit);
+    }
+
+    /** As above for any tuplet: tuplet is the number of notes (3 = triplet, 5 = quintuplet), 0 for none. */
+    public static Pos enter(Score s, Pos p, Chord template, int type, int dots, int tuplet, int tripletUnit) {
         if (p.measure >= s.measures.size()) s.appendMeasures(p.measure - s.measures.size() + 1);
         Measure m = s.measures.get(p.measure);
         Voice v = prepareVoice(m, p.staff, p.voice);
@@ -228,18 +233,19 @@ public final class ScoreEdit {
             return enterInTuplet(s, p, v, at.tuplet, template, type, dots);
         }
 
-        if (triplet && type < Duration.MAX_TYPE) {
+        int actual = tuplet, normal = Tuplet.normalFor(Math.max(2, tuplet));
+        if (tuplet > 1 && type < Duration.MAX_TYPE) {
             // A triplet on another unit than the entered value (the unit chosen when triplets were
             // turned on; for a dotted value the next larger one: a dotted 16th triplet is three
             // quarters of a triplet eighth). Lay out that triplet as rests, then enter the value at
             // its start.
             int unit = tripletUnit >= 0 ? tripletUnit : (dots > 0 && type > Duration.WHOLE ? type - 1 : type);
-            if (unit != type || dots > 0) {
-                Tuplet t = new Tuplet(3, 2, unit);
+            if ((unit != type || dots > 0) && Tuplet.exact(actual, unit) && Duration.ticks(type, dots) * normal % actual == 0) {
+                Tuplet t = new Tuplet(actual, normal, unit);
                 int span = t.spanTicks();
                 if (p.tick + span <= m.ticks() && t.scale(Duration.ticks(type, dots)) <= span) {
                     List<ChordRest> rests = new ArrayList<ChordRest>();
-                    for (int i = 0; i < 3; i++) {
+                    for (int i = 0; i < actual; i++) {
                         Rest r = new Rest();
                         r.type = unit;
                         r.tuplet = t;
@@ -249,11 +255,11 @@ public final class ScoreEdit {
                     return enterInTuplet(s, p, v, t, template, type, dots);
                 }
             }
-            Tuplet t = new Tuplet(3, 2, type);
+            Tuplet t = new Tuplet(actual, normal, type);
             int span = t.spanTicks();
-            if (dots == 0 && p.tick + span <= m.ticks()) {
+            if (dots == 0 && Tuplet.exact(actual, type) && p.tick + span <= m.ticks()) {
                 List<ChordRest> els = new ArrayList<ChordRest>();
-                for (int i = 0; i < 3; i++) {
+                for (int i = 0; i < actual; i++) {
                     ChordRest cr = (i == 0 && template != null) ? template.copy() : new Rest();
                     cr.type = type;
                     cr.dots = 0;

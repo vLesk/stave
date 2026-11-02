@@ -49,6 +49,8 @@ public final class MscxReader {
         final java.util.Map<ChordRest, Integer> melismaTicks = new java.util.IdentityHashMap<ChordRest, Integer>();
         /** MusicXML lyrics with an &lt;extend/&gt;, resolved once the score is complete. */
         final java.util.Set<ChordRest> melismaExtends = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<ChordRest, Boolean>());
+        /** Slurs and hairpins read from the file: {element, kind, measure, tick, end measure, end tick}. */
+        final List<Object[]> spans = new ArrayList<Object[]>();
     }
 
     private static final class TieRef {
@@ -253,6 +255,7 @@ public final class MscxReader {
         }
         if (s.title == null || s.title.isEmpty()) s.title = "Untitled score";
         Syllables.resolveMelismaTicks(s, res.melismaTicks);
+        resolveSpans(s, res.spans);
         return res;
     }
 
@@ -286,6 +289,42 @@ public final class MscxReader {
         }
     }
 
+    /** Slur and hairpin lengths, once every measure (and so every measure length) is known. */
+    static void resolveSpans(Score s, List<Object[]> spans) {
+        for (Object[] sp : spans) {
+            ChordRest cr = (ChordRest) sp[0];
+            int kind = (Integer) sp[1];
+            int start = Syllables.globalTick(s, (Integer) sp[2], (Integer) sp[3]);
+            int em = Math.min((Integer) sp[4], s.measures.size());
+            int end = em >= s.measures.size() ? Syllables.globalTick(s, s.measures.size() - 1, s.measures.get(s.measures.size() - 1).ticks())
+                    : Syllables.globalTick(s, em, (Integer) sp[5]);
+            if (end <= start) continue;
+            if (kind == 0) {
+                if (cr instanceof Chord) cr.slurTicks = end - start;
+            } else {
+                cr.hairpin = kind;
+                cr.hairpinTicks = end - start;
+            }
+        }
+    }
+
+    /** A grace chord: kind from its tag (acciaccatura, appoggiatura, grace4/16/32), notes as in a chord. */
+    private static Chord readGrace(Element el, int keyFifths) {
+        int kind = Xml.child(el, "acciaccatura") != null ? Chord.ACCIACCATURA : Chord.APPOGGIATURA;
+        int type = Duration.typeFromXml(Xml.text(el, "durationType"));
+        if (Xml.child(el, "grace16") != null) type = Duration.N16;
+        else if (Xml.child(el, "grace32") != null) type = Duration.N32;
+        else if (Xml.child(el, "grace4") != null) type = Duration.QUARTER;
+        Chord g = Chord.grace(kind, type < 0 ? Duration.EIGHTH : type, null);
+        for (Element ne : Xml.children(el, "Note")) {
+            int pitch = Xml.intText(ne, "pitch", 60);
+            int tpc = Xml.intText(ne, "tpc", -100);
+            if (!Pitch.validTpc(tpc) || Pitch.pitchClassOfTpc(tpc) != MathMod.mod(pitch, 12)) tpc = Pitch.spell(pitch, keyFifths);
+            g.addNote(new Note(pitch, tpc));
+        }
+        return g;
+    }
+
     private static boolean isGrace(Element chord) {
         for (Element c : Xml.children(chord)) {
             String t = c.getTagName();
@@ -299,6 +338,8 @@ public final class MscxReader {
         Voice voice = sm.voices[v];
         int tick = 0;
         Tuplet curTuplet = null;
+        List<Chord> pendingGraces = new ArrayList<Chord>();
+        List<int[]> pendingSpans = new ArrayList<int[]>();
         Map<String, Tuplet> tupletsById = new HashMap<String, Tuplet>();
         String pendingDynamic = null, pendingHarmony = null, pendingText = null;
         boolean pendingFermata = false;
@@ -312,6 +353,18 @@ public final class MscxReader {
                     else sm.clef = Clef.fromMscx(ct);
                 }
                 // mid-measure clef changes are not supported and are ignored
+            } else if (t.equals("Spanner") && ("Slur".equals(el.getAttribute("type")) || "HairPin".equals(el.getAttribute("type")))) {
+                // the start of a slur or hairpin: <next><location> says where it ends, relative to here
+                Element next = Xml.child(el, "next");
+                Element loc = next == null ? null : Xml.child(next, "location");
+                if (loc != null) {
+                    int kind = 0;
+                    if ("HairPin".equals(el.getAttribute("type"))) {
+                        int sub = Xml.intText(Xml.child(el, "HairPin"), "subtype", 0);
+                        kind = sub == 1 || sub == 3 ? ChordRest.DIMINUENDO : ChordRest.CRESCENDO;
+                    }
+                    pendingSpans.add(new int[]{kind, m + Xml.intText(loc, "measures", 0), tick + Xml.fractionTicks(Xml.text(loc, "fractions"))});
+                }
             } else if (t.equals("Tuplet")) {
                 int normal = Xml.intText(el, "normalNotes", 2);
                 int actual = Xml.intText(el, "actualNotes", 3);
@@ -345,7 +398,10 @@ public final class MscxReader {
                     tick += dt;
                 }
             } else if (t.equals("Chord") || t.equals("Rest") || t.equals("MeasureRepeat")) {
-                if (t.equals("Chord") && isGrace(el)) continue;
+                if (t.equals("Chord") && isGrace(el)) {
+                    pendingGraces.add(readGrace(el, mm.keyFifths));
+                    continue;
+                }
                 ChordRest cr;
                 if (t.equals("MeasureRepeat")) {
                     res.warnings.add("Measure repeats were replaced by rests.");
@@ -362,6 +418,8 @@ public final class MscxReader {
                     }
                 } else {
                     Chord c = new Chord();
+                    c.graces.addAll(pendingGraces);
+                    pendingGraces.clear();
                     c.type = Math.max(0, Duration.typeFromXml(Xml.text(el, "durationType")));
                     c.dots = Xml.intText(el, "dots", 0);
                     String sd = Xml.text(el, "StemDirection");
@@ -436,6 +494,8 @@ public final class MscxReader {
                 pendingHarmony = null;
                 pendingText = null;
                 pendingFermata = false;
+                for (int[] sp : pendingSpans) res.spans.add(new Object[]{cr, sp[0], m, tick, sp[1], sp[2]});
+                pendingSpans.clear();
                 voice.items.add(cr);
                 tick += cr.ticks();
             } else if (t.equals("BarLine") && v == 0) {
