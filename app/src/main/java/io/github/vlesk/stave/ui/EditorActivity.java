@@ -228,6 +228,8 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
         super.onConfigurationChanged(c);
         // rebuild the toolbars for the new width (one or two rows) and re-flow the score
         boolean input = st != null && st.inputMode;
+        // keep the same place in the score (and the zoom) across the new layout
+        ScoreView.Anchor anchor = st == null || view == null ? null : view.anchor(st.inputMode && st.cursor != null ? st.cursor : st.selPos);
         if (paletteOpen()) closePalette();
         lyricInputOn = false;
         lyricBarListener = null;
@@ -236,6 +238,7 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
             view.bind(st, this);
             if (input) setInputMode(true);
             refresh();
+            view.restoreAnchor(anchor);
         }
     }
 

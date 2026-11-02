@@ -226,6 +226,75 @@ public final class ScoreView extends View {
         laidOutScore = state.score;
         clampScroll();
         keepSystemScroll();
+        if (pendingAnchor != null && getHeight() > 0) {
+            Anchor a = pendingAnchor;
+            pendingAnchor = null;
+            applyAnchor(a);
+        }
+    }
+
+    /**
+     * Where in the score the view is, to restore it after the screen turns (the layout changes
+     * then): a note on screen keeps its place on screen, otherwise the system at the top does.
+     */
+    public static final class Anchor {
+        int measure, staff;
+        /** With a note: its staff's height on screen as a fraction of the view; else how far into the top system the view starts. */
+        float fraction;
+        boolean onNote;
+        float zoom;
+    }
+
+    private Anchor pendingAnchor;
+
+    public Anchor anchor(Pos focus) {
+        if (dl == null || dl.systems.isEmpty() || getHeight() == 0) return null;
+        Anchor a = new Anchor();
+        a.zoom = zoom;
+        float fy = staffScreenY(focus);
+        if (!Float.isNaN(fy) && fy >= 0 && fy <= getHeight() - lyricObstruction) {
+            a.onNote = true;
+            a.measure = focus.measure;
+            a.staff = focus.staff;
+            a.fraction = fy / getHeight();
+            return a;
+        }
+        float top = scrollYPx / sp();
+        DisplayList.SystemInfo at = dl.systems.get(dl.systems.size() - 1);
+        for (DisplayList.SystemInfo si : dl.systems) {
+            if (si.bottom >= top) {
+                at = si;
+                break;
+            }
+        }
+        a.measure = at.firstMeasure;
+        a.fraction = (top - at.top) / Math.max(0.01f, at.bottom - at.top);
+        return a;
+    }
+
+    /** Restores an anchor taken from the previous view (applied once the new size is laid out). */
+    public void restoreAnchor(Anchor a) {
+        if (a == null) return;
+        zoom = a.zoom;
+        if (dl != null && getHeight() > 0 && laidOutWidth == getWidth()) {
+            relayout(true);
+            applyAnchor(a);
+        } else {
+            pendingAnchor = a;
+        }
+    }
+
+    private void applyAnchor(Anchor a) {
+        if (dl == null || a.measure < 0 || a.measure >= dl.measures.size() || dl.measures.get(a.measure) == null) return;
+        DisplayList.SystemInfo si = dl.systems.get(dl.measures.get(a.measure).system);
+        scroller.forceFinished(true);
+        if (a.onNote) {
+            scrollYPx = si.staffY[Math.max(0, Math.min(a.staff, si.staffY.length - 1))] * sp() - a.fraction * getHeight();
+        } else {
+            scrollYPx = (si.top + Math.max(-0.5f, Math.min(1f, a.fraction)) * (si.bottom - si.top)) * sp();
+        }
+        clampScroll();
+        invalidate();
     }
 
     /** Call after every edit. */
