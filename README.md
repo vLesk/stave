@@ -138,6 +138,7 @@ to a GitHub release. *Delete release* is a maintenance workflow that removes a r
 | 0.4.0 | The playback cursor moves continuously through each measure |
 | 0.5.0 | Lyrics typed directly on the score in a lyric entry mode, with MuseScore's hyphen, melisma and layout rules |
 | 0.6.0 | Slurs, hairpins, grace notes, double dots, duplets to sextuplets, respell, chords played on the piano, sideways scrolling of dense lines, faster editing of long scores, place kept on rotation, `rf` dynamic; fixes found by entering five real scores |
+| 0.7.0 | All of MuseScore's instruments (every template in its `instruments.xml`) in a searchable picker grouped as in MuseScore; all 33 of MuseScore's standard-staff clefs, with the glyphs Leland lacks drawn from Bravura; MusicXML instrument sounds |
 
 ## Tests
 
