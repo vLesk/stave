@@ -1,0 +1,72 @@
+{
+  "fontName": "Stave Supplement",
+  "source": "Bravura Regular Version 1.482",
+  "glyphs": {
+    "gClef8vbCClef": {
+      "codepoint": "U+E056",
+      "bBoxSW": [
+        0.0,
+        -2.632
+      ],
+      "bBoxNE": [
+        3.368,
+        4.392
+      ]
+    },
+    "cClefSquare": {
+      "codepoint": "U+E060",
+      "bBoxSW": [
+        0.0,
+        -1.996
+      ],
+      "bBoxNE": [
+        2.336,
+        1.996
+      ]
+    },
+    "cClefFrench": {
+      "codepoint": "U+F408",
+      "bBoxSW": [
+        0.0,
+        -3.116
+      ],
+      "bBoxNE": [
+        3.452,
+        2.564
+      ]
+    },
+    "cClefFrench20C": {
+      "codepoint": "U+F4BF",
+      "bBoxSW": [
+        0.0,
+        -2.156
+      ],
+      "bBoxNE": [
+        2.572,
+        2.152
+      ]
+    },
+    "fClefFrench": {
+      "codepoint": "U+F406",
+      "bBoxSW": [
+        0.0,
+        -2.34
+      ],
+      "bBoxNE": [
+        3.404,
+        1.044
+      ]
+    },
+    "fClef19thCentury": {
+      "codepoint": "U+F407",
+      "bBoxSW": [
+        0.0,
+        -2.328
+      ],
+      "bBoxNE": [
+        4.164,
+        1.092
+      ]
+    }
+  }
+}

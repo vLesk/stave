@@ -23,7 +23,7 @@ public final class Theme {
     public int playback, cursorFill;
     public final float density;
 
-    private static Typeface music, text, textItalic, textBold;
+    private static Typeface music, supplement, text, textItalic, textBold;
 
     public Theme(Context c) {
         dark = (c.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
@@ -105,6 +105,17 @@ public final class Theme {
     public static synchronized Typeface music(Context c) {
         if (music == null) music = Typeface.createFromAsset(c.getAssets(), "fonts/Leland.otf");
         return music;
+    }
+
+    /** The supplementary music font: SMuFL glyphs Leland lacks (see Sym.SUPPLEMENT). */
+    public static synchronized Typeface supplement(Context c) {
+        if (supplement == null) supplement = Typeface.createFromAsset(c.getAssets(), "fonts/StaveSupplement.otf");
+        return supplement;
+    }
+
+    /** The music font that has a glyph. */
+    public static Typeface music(Context c, int glyph) {
+        return io.github.vlesk.stave.engrave.Sym.SUPPLEMENT[glyph] ? supplement(c) : music(c);
     }
 
     public static synchronized Typeface text(Context c) {

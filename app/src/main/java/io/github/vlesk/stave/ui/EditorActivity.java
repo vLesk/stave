@@ -1651,17 +1651,15 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
             final EditorState st = a.st;
             List<PaletteView.Category> cats = new ArrayList<PaletteView.Category>();
             PaletteView.Category clefs = new PaletteView.Category("Clefs");
-            int[] ct = {Clef.TREBLE, Clef.BASS, Clef.ALTO, Clef.TENOR, Clef.TREBLE_8VB, Clef.TREBLE_8VA, Clef.TREBLE_15MA, Clef.BASS_8VB,
-                    Clef.BASS_8VA, Clef.BASS_15MB, Clef.BASS_15MA, Clef.SOPRANO, Clef.MEZZO, Clef.BARITONE_C, Clef.PERC};
-            for (int i = 0; i < ct.length; i++) {
-                final int clef = ct[i];
-                clefs.add(new PaletteView.Cell(Sym.str(Layout.clefGlyph(clef)), true, Clef.label(clef), Clef.label(clef) + " clef", new Runnable() {
+            for (final int clef : Clef.PALETTE) {
+                int g = Layout.clefGlyph(clef);
+                clefs.add(new PaletteView.Cell(Sym.str(g), true, Clef.label(clef), Clef.name(clef), new Runnable() {
                     @Override
                     public void run() {
                         if (!a.requireSelection()) return;
                         st.setClef(clef);
                     }
-                }));
+                }).supplement(Sym.SUPPLEMENT[g]));
             }
             cats.add(clefs);
 

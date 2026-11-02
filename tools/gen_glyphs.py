@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Generate Sym.java (SMuFL glyph table) from Leland metadata + SMuFL glyphnames.json.
 
+Glyphs Leland lacks come from the supplementary font (assets/fonts/StaveSupplement.otf, see
+tools/gen_supplement_font.py), whose codepoints and boxes are in supplement_metadata.json;
+Sym.SUPPLEMENT marks them so the renderers draw them with that font.
+
 Usage: python3 tools/gen_glyphs.py third_party/smufl app/src/main/java/io/github/vlesk/stave/engrave/Sym.java
 """
 import json, sys, os
@@ -26,12 +30,21 @@ tuplet0 tuplet1 tuplet2 tuplet3 tuplet4 tuplet5 tuplet6 tuplet7 tuplet8 tuplet9
 keyboardPedalPed keyboardPedalUp
 dynamicRinforzando1
 gClef15ma fClef8va fClef15ma fClef15mb
+gClef15mb gClef8vbOld gClef8vbParens cClef8vb unpitchedPercussionClef2
+gClef8vbCClef cClefSquare cClefFrench cClefFrench20C fClefFrench fClef19thCentury
 """.split()
 
 def main(src, out):
     meta = json.load(open(os.path.join(src, 'leland_metadata.json')))
     names = json.load(open(os.path.join(src, 'glyphnames.json')))
-    bb = meta['glyphBBoxes']; anc = meta.get('glyphsWithAnchors', {})
+    bb = dict(meta['glyphBBoxes']); anc = meta.get('glyphsWithAnchors', {})
+    sup = json.load(open(os.path.join(src, 'supplement_metadata.json')))['glyphs']
+    names = dict(names)
+    for g, d in sup.items():
+        if g in bb:
+            raise SystemExit('%s is in Leland; drop it from the supplement' % g)
+        bb[g] = d
+        names[g] = {'codepoint': d['codepoint']}
     eng = meta['engravingDefaults']
     L = []
     w = L.append
@@ -45,6 +58,8 @@ def main(src, out):
     w('    public static final int COUNT = %d;' % len(GLYPHS))
     w('    public static final String[] NAMES = {%s};' % ', '.join('"%s"' % g for g in GLYPHS))
     w('    public static final char[] CODE = {%s};' % ', '.join("(char) 0x" + names[g]['codepoint'][2:] for g in GLYPHS))
+    w('    /** True for glyphs drawn with the supplementary font (StaveSupplement.otf) instead of Leland. */')
+    w('    public static final boolean[] SUPPLEMENT = {%s};' % ', '.join('true' if g in sup else 'false' for g in GLYPHS))
     def f(v): return ('%.3ff' % v)
     rows = []
     for g in GLYPHS:

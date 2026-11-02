@@ -21,7 +21,7 @@ import javax.imageio.ImageIO;
 
 /** Renders scores to PNG with Java2D to check the engraving engine without a device. */
 public class RenderPng {
-    static Font leland, edwin, edwinItalic, edwinBold;
+    static Font leland, supplement, edwin, edwinItalic, edwinBold;
     static final FontRenderContext FRC = new FontRenderContext(null, true, true);
 
     static Font font(int f) {
@@ -55,7 +55,7 @@ public class RenderPng {
             g.setColor(it.color == DisplayList.C_MUTED ? Color.GRAY : Color.BLACK);
             switch (it.kind) {
                 case DisplayList.GLYPH:
-                    g.setFont(leland.deriveFont(4 * sp * it.w));
+                    g.setFont((Sym.SUPPLEMENT[it.glyph] ? supplement : leland).deriveFont(4 * sp * it.w));
                     g.drawString(String.valueOf(Sym.CODE[it.glyph]), it.x * sp, it.y * sp);
                     break;
                 case DisplayList.LINE:
@@ -164,6 +164,7 @@ public class RenderPng {
     public static void main(String[] args) throws Exception {
         String fonts = args[0];
         leland = Font.createFont(Font.TRUETYPE_FONT, new File(fonts, "Leland.otf"));
+        supplement = Font.createFont(Font.TRUETYPE_FONT, new File(fonts, "StaveSupplement.otf"));
         edwin = Font.createFont(Font.TRUETYPE_FONT, new File(fonts, "Edwin-Roman.otf"));
         edwinItalic = Font.createFont(Font.TRUETYPE_FONT, new File(fonts, "Edwin-Italic.otf"));
         edwinBold = Font.createFont(Font.TRUETYPE_FONT, new File(fonts, "Edwin-Bold.otf"));

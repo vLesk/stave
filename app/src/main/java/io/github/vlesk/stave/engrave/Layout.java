@@ -238,36 +238,18 @@ public final class Layout {
         return y - Sym.BBOX[g][1];
     }
 
+    private static final int[] CLEF_GLYPH = new int[Clef.COUNT];
+
+    static {
+        for (int c = 0; c < Clef.COUNT; c++) {
+            CLEF_GLYPH[c] = Sym.byName(Clef.glyphName(c));
+            if (CLEF_GLYPH[c] < 0) throw new IllegalStateException("no glyph " + Clef.glyphName(c));
+        }
+    }
+
     /** The SMuFL glyph of a clef. */
     public static int clefGlyph(int clef) {
-        switch (clef) {
-            case Clef.BASS:
-                return Sym.fClef;
-            case Clef.BASS_8VB:
-                return Sym.fClef8vb;
-            case Clef.BASS_8VA:
-                return Sym.fClef8va;
-            case Clef.BASS_15MA:
-                return Sym.fClef15ma;
-            case Clef.BASS_15MB:
-                return Sym.fClef15mb;
-            case Clef.ALTO:
-            case Clef.TENOR:
-            case Clef.SOPRANO:
-            case Clef.MEZZO:
-            case Clef.BARITONE_C:
-                return Sym.cClef;
-            case Clef.TREBLE_8VB:
-                return Sym.gClef8vb;
-            case Clef.TREBLE_8VA:
-                return Sym.gClef8va;
-            case Clef.TREBLE_15MA:
-                return Sym.gClef15ma;
-            case Clef.PERC:
-                return Sym.unpitchedPercussionClef1;
-            default:
-                return Sym.gClef;
-        }
+        return CLEF_GLYPH[clef];
     }
 
     private boolean isDrums(int staff) {
@@ -320,7 +302,7 @@ public final class Layout {
     }
 
     public static int noteLine(int clef, boolean drums, Note n) {
-        if (drums && clef == Clef.PERC) return drumLine(n.pitch);
+        if (drums && Clef.isPercussion(clef)) return drumLine(n.pitch);
         return Clef.line(clef, n.pitch, n.tpc);
     }
 
@@ -1193,7 +1175,7 @@ public final class Layout {
     // --------------------------------------------------------------------------- staff generation
 
     private void drawKeySig(StaffGen g, int clef, int key, int oldKey, float x) {
-        if (clef == Clef.PERC) return;
+        if (Clef.isPercussion(clef)) return;
         if (key == 0 && oldKey != 0) {
             int[] lines = Clef.keySigLines(clef, oldKey > 0);
             for (int i = 0; i < Math.abs(oldKey); i++) {
@@ -1634,7 +1616,7 @@ public final class Layout {
 
     private void emitChord(StaffGen g, ChordGeom cg, Pos pos, int sysIdx) {
         Chord c = cg.chord;
-        boolean drums = isDrums(pos.staff) && clefAt(pos.staff, pos.measure) == Clef.PERC;
+        boolean drums = isDrums(pos.staff) && Clef.isPercussion(clefAt(pos.staff, pos.measure));
         float minX = cg.x, maxX = cg.x + cg.headW;
         for (int i = 0; i < c.notes.size(); i++) {
             minX = Math.min(minX, cg.x + cg.noteDx[i]);

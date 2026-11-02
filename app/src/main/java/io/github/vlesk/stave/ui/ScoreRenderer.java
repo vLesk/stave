@@ -21,7 +21,7 @@ public final class ScoreRenderer implements TextMetrics {
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
     private final Paint measurePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Typeface music, text, italic, bold;
+    private final Typeface music, supplement, text, italic, bold;
     private final Path path = new Path();
     private final char[] one = new char[1];
 
@@ -29,6 +29,7 @@ public final class ScoreRenderer implements TextMetrics {
 
     public ScoreRenderer(Context c) {
         music = Theme.music(c);
+        supplement = Theme.supplement(c);
         text = Theme.text(c);
         italic = Theme.textItalic(c);
         bold = Theme.textBold(c);
@@ -76,6 +77,7 @@ public final class ScoreRenderer implements TextMetrics {
             switch (it.kind) {
                 case DisplayList.GLYPH:
                     glyphPaint.setColor(col);
+                    glyphPaint.setTypeface(Sym.SUPPLEMENT[it.glyph] ? supplement : music);
                     glyphPaint.setTextSize(4 * sp * it.w);
                     one[0] = Sym.CODE[it.glyph];
                     c.drawText(one, 0, 1, it.x * sp, it.y * sp, glyphPaint);
