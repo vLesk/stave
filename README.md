@@ -50,7 +50,7 @@ your phone and finish it on the desktop, or the other way round.
 | Chord symbols, staff text, tempo, rehearsal marks | Yes |
 | Repeats, double/final/dashed barlines, pickup measure | Yes |
 | Copy/paste, range selection (Shift+click) | Tap a measure, **long-press** to extend the range |
-| Instruments panel | Add, remove and reorder instruments (40+ from MuseScore's instrument list) |
+| Instruments panel | Add, remove and reorder instruments. **All of MuseScore's instruments** (every template in its `instruments.xml`), with MuseScore's groups, names ("Clarinet in A"), MIDI sounds and clefs, in a searchable list |
 | Mixer, playback with cursor | Playback through Android's built-in General MIDI synth, a cursor that moves smoothly through each measure, speed 50–200 %, per-part volume and mute |
 | Page view | **Reflowed continuous view** that wraps to the screen width, with pinch-to-zoom. A line too dense for the screen keeps its spacing and **scrolls sideways** on its own. Turning the device keeps your place in the score |
 | New score wizard | One-screen form with templates (piano, SATB, string quartet, lead sheet …) and sensible defaults |
@@ -174,13 +174,16 @@ app/src/main/java/io/github/vlesk/stave/
   io/       .mscz/.mscx reader+writer, MusicXML reader+writer, score library
   audio/    playback timeline, MIDI writer, MediaPlayer playback, preview synth
   ui/       activities and custom views (score canvas, piano, palettes)
-tools/      build.sh, test.sh, robolectric.sh, simulate.sh (+ sim/extract.py), gen_glyphs.py
+tools/      build.sh, test.sh, robolectric.sh, simulate.sh (+ sim/extract.py), gen_glyphs.py,
+            gen_instruments.py (instrument catalog from MuseScore's instruments.xml)
 test/       JVM tests, Java2D renderer, input simulation, Robolectric UI tests
 ```
 
 ## Known limitations
 
-* Scores are shown and edited at concert pitch. Transposing-instrument display is not implemented yet.
+* Scores are shown and edited at concert pitch. Transposing-instrument display is not implemented yet,
+  so variants such as Clarinet in B♭ and Clarinet in A differ only in name. Tablature instruments
+  are not offered (they open as standard notation).
 * Not yet supported: other lines (8va, pedal, voltas, text lines), cross-staff notation, tablature,
   measure repeats and multi-measure rests. Imported files keep their notes but drop these elements;
   after import the app lists what it simplified (tablature, nested tuplets, measure repeats,

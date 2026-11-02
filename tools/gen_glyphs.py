@@ -25,6 +25,7 @@ metAugmentationDot
 tuplet0 tuplet1 tuplet2 tuplet3 tuplet4 tuplet5 tuplet6 tuplet7 tuplet8 tuplet9
 keyboardPedalPed keyboardPedalUp
 dynamicRinforzando1
+gClef15ma fClef8va fClef15ma fClef15mb
 """.split()
 
 def main(src, out):

@@ -141,7 +141,8 @@ public final class MscxReader {
                 }
                 if (stt != null && "tablature".equals(stt.getAttribute("group"))) {
                     res.warnings.add("Tablature staff of " + name + " is shown as standard notation.");
-                    clef = Clef.TREBLE_8VB;
+                    // the standard-notation clef of the instrument (bass tablature reads in the bass clef)
+                    clef = def != null && i < def.clefs.length && def.clefs[i] != Clef.PERC ? def.clefs[i] : Clef.TREBLE_8VB;
                 }
                 p.staves.add(new Staff(clef));
             }

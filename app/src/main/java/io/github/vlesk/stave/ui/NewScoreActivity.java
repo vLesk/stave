@@ -1,8 +1,6 @@
 package io.github.vlesk.stave.ui;
 
 import android.app.Activity;
-import android.app.AlertDialog;
-import android.content.DialogInterface;
 import android.content.Intent;
 import android.os.Bundle;
 import android.text.InputType;
@@ -253,38 +251,21 @@ public final class NewScoreActivity extends Activity {
             Instruments.Def d = Instruments.byId(id);
             if (d == null) continue;
             if (sb.length() > 0) sb.append(", ");
-            sb.append(d.name);
+            sb.append(d.label);
         }
         instrumentSummary.setText(sb.toString());
     }
 
     private void chooseInstruments() {
-        final Instruments.Def[] all = Instruments.ALL;
-        String[] labels = new String[all.length];
-        final boolean[] checked = new boolean[all.length];
-        for (int i = 0; i < all.length; i++) {
-            labels[i] = all[i].name + "  ·  " + all[i].group;
-            checked[i] = instrumentIds.contains(all[i].id);
-        }
-        new AlertDialog.Builder(this).setTitle(R.string.instruments)
-                .setMultiChoiceItems(labels, checked, new DialogInterface.OnMultiChoiceClickListener() {
-                    @Override
-                    public void onClick(DialogInterface d, int which, boolean isChecked) {
-                        checked[which] = isChecked;
-                    }
-                })
-                .setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface d, int w) {
-                        List<String> ids = new ArrayList<String>();
-                        for (int i = 0; i < all.length; i++) if (checked[i]) ids.add(all[i].id);
-                        if (ids.isEmpty()) return;
-                        instrumentIds.clear();
-                        instrumentIds.addAll(ids);
-                        selectChip(templateChips, null);
-                        updateSummary();
-                    }
-                }).setNegativeButton(R.string.cancel, null).show();
+        InstrumentPicker.pickMany(this, t, instrumentIds, new InstrumentPicker.Picked() {
+            @Override
+            public void picked(List<Instruments.Def> defs) {
+                instrumentIds.clear();
+                for (Instruments.Def d : defs) instrumentIds.add(d.id);
+                selectChip(templateChips, null);
+                updateSummary();
+            }
+        });
     }
 
     private int num(EditText e, int def, int min, int max) {

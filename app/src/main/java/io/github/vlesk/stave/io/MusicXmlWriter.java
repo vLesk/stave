@@ -6,6 +6,7 @@ import io.github.vlesk.stave.model.ChordRest;
 import io.github.vlesk.stave.model.ChordSymbols;
 import io.github.vlesk.stave.model.Clef;
 import io.github.vlesk.stave.model.Duration;
+import io.github.vlesk.stave.model.Instruments;
 import io.github.vlesk.stave.model.Measure;
 import io.github.vlesk.stave.model.Note;
 import io.github.vlesk.stave.model.Part;
@@ -89,6 +90,8 @@ public final class MusicXmlWriter {
             if (part.shortName != null && !part.shortName.isEmpty()) x.tag("part-abbreviation", part.shortName);
             x.open("score-instrument", "id", id + "-I1");
             x.tag("instrument-name", part.name);
+            Instruments.Def def = Instruments.byId(part.instrumentId);
+            if (def != null && !def.musicXmlId.isEmpty()) x.tag("instrument-sound", def.musicXmlId);
             x.close();
             x.open("midi-instrument", "id", id + "-I1");
             x.tag("midi-channel", part.drums ? 10 : Math.min(16, p + 1 >= 10 ? p + 2 : p + 1));

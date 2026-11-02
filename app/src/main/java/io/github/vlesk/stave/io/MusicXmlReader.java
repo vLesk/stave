@@ -126,7 +126,8 @@ public final class MusicXmlReader {
             String id = sp.getAttribute("id");
             String name = Xml.text(sp, "part-name");
             if (name == null || name.isEmpty()) name = "Instrument";
-            Instruments.Def def = Instruments.byName(name);
+            Element si = Xml.child(sp, "score-instrument");
+            Instruments.Def def = Instruments.forMusicXml(si != null ? Xml.text(si, "instrument-sound") : null, name);
             int program = def != null ? def.program : 0;
             boolean drums = def != null && def.drums;
             Element mi = Xml.child(sp, "midi-instrument");
