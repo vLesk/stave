@@ -238,19 +238,31 @@ public final class Layout {
         return y - Sym.BBOX[g][1];
     }
 
-    private static int clefGlyph(int clef) {
+    /** The SMuFL glyph of a clef. */
+    public static int clefGlyph(int clef) {
         switch (clef) {
             case Clef.BASS:
                 return Sym.fClef;
             case Clef.BASS_8VB:
                 return Sym.fClef8vb;
+            case Clef.BASS_8VA:
+                return Sym.fClef8va;
+            case Clef.BASS_15MA:
+                return Sym.fClef15ma;
+            case Clef.BASS_15MB:
+                return Sym.fClef15mb;
             case Clef.ALTO:
             case Clef.TENOR:
+            case Clef.SOPRANO:
+            case Clef.MEZZO:
+            case Clef.BARITONE_C:
                 return Sym.cClef;
             case Clef.TREBLE_8VB:
                 return Sym.gClef8vb;
             case Clef.TREBLE_8VA:
                 return Sym.gClef8va;
+            case Clef.TREBLE_15MA:
+                return Sym.gClef15ma;
             case Clef.PERC:
                 return Sym.unpitchedPercussionClef1;
             default:

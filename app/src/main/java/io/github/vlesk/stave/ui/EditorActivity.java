@@ -38,6 +38,7 @@ import io.github.vlesk.stave.R;
 import io.github.vlesk.stave.audio.Player;
 import io.github.vlesk.stave.audio.Synth;
 import io.github.vlesk.stave.edit.EditorState;
+import io.github.vlesk.stave.engrave.Layout;
 import io.github.vlesk.stave.engrave.Sym;
 import io.github.vlesk.stave.io.MscxReader;
 import io.github.vlesk.stave.io.Mscz;
@@ -1650,11 +1651,11 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
             final EditorState st = a.st;
             List<PaletteView.Category> cats = new ArrayList<PaletteView.Category>();
             PaletteView.Category clefs = new PaletteView.Category("Clefs");
-            int[] cg = {Sym.gClef, Sym.fClef, Sym.cClef, Sym.cClef, Sym.gClef8vb, Sym.gClef8va, Sym.fClef8vb, Sym.unpitchedPercussionClef1};
-            int[] ct = {Clef.TREBLE, Clef.BASS, Clef.ALTO, Clef.TENOR, Clef.TREBLE_8VB, Clef.TREBLE_8VA, Clef.BASS_8VB, Clef.PERC};
-            for (int i = 0; i < cg.length; i++) {
+            int[] ct = {Clef.TREBLE, Clef.BASS, Clef.ALTO, Clef.TENOR, Clef.TREBLE_8VB, Clef.TREBLE_8VA, Clef.TREBLE_15MA, Clef.BASS_8VB,
+                    Clef.BASS_8VA, Clef.BASS_15MB, Clef.BASS_15MA, Clef.SOPRANO, Clef.MEZZO, Clef.BARITONE_C, Clef.PERC};
+            for (int i = 0; i < ct.length; i++) {
                 final int clef = ct[i];
-                clefs.add(new PaletteView.Cell(Sym.str(cg[i]), true, Clef.label(clef), Clef.label(clef) + " clef", new Runnable() {
+                clefs.add(new PaletteView.Cell(Sym.str(Layout.clefGlyph(clef)), true, Clef.label(clef), Clef.label(clef) + " clef", new Runnable() {
                     @Override
                     public void run() {
                         if (!a.requireSelection()) return;
@@ -2238,22 +2239,12 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
     }
 
     void pickInstrument(final InstrumentPicked cb) {
-        final List<Instruments.Def> defs = new ArrayList<Instruments.Def>();
-        List<String> labels = new ArrayList<String>();
-        for (String g : Instruments.groups()) {
-            for (Instruments.Def d : Instruments.ALL) {
-                if (!d.group.equals(g)) continue;
-                defs.add(d);
-                labels.add(d.name + "  ·  " + g);
+        InstrumentPicker.pickOne(this, t, new InstrumentPicker.Picked() {
+            @Override
+            public void picked(List<Instruments.Def> defs) {
+                cb.picked(defs.get(0));
             }
-        }
-        new AlertDialog.Builder(this).setTitle(R.string.add_instrument)
-                .setItems(labels.toArray(new String[0]), new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface d, int which) {
-                        cb.picked(defs.get(which));
-                    }
-                }).setNegativeButton(R.string.cancel, null).show();
+        });
     }
 
     private void mixerDialog() {

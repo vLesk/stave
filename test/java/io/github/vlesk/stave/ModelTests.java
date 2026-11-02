@@ -300,6 +300,124 @@ public class ModelTests {
         Score pk3 = MusicXmlReader.read(MusicXmlWriter.write(pk).getBytes("UTF-8")).score;
         check(pk3.measures.get(0).ticks() == 480, "pickup musicxml reload " + pk3.measures.get(0).ticks());
 
+        // MuseScore's instrument catalog: every template of share/instruments/instruments.xml
+        {
+            check(Instruments.ALL.length == 644, "all MuseScore instruments: " + Instruments.ALL.length);
+            java.util.Set<String> ids = new java.util.HashSet<String>(), labels = new java.util.HashSet<String>();
+            for (Instruments.Def d : Instruments.ALL) {
+                check(ids.add(d.id), "unique id " + d.id);
+                check(Instruments.byId(d.id) == d, "byId " + d.id);
+                check(d.clefs.length >= 1 && d.program >= 0 && d.program < 128, "staves and program " + d.id);
+                check(!d.name.isEmpty() && !d.label.isEmpty(), "named " + d.id);
+                if (d.listed) check(labels.add(d.label), "unique picker label " + d.label);
+                if (d.base != null) check(Instruments.byId(d.base) != null, "base " + d.base + " of " + d.id);
+                Part made = d.create();
+                check(made.staves.size() == d.clefs.length && d.id.equals(made.instrumentId) && made.drums == d.drums, "create " + d.id);
+            }
+            check(Instruments.LISTED.size() > 580 && Instruments.groups().size() == 12, "picker: " + Instruments.LISTED.size() + " in " + Instruments.groups());
+            // ids written by earlier versions of Stave
+            String[] old = {"piano", "electric-piano", "harpsichord", "organ", "accordion", "celesta", "voice", "soprano", "alto", "tenor",
+                    "baritone", "bass", "piccolo", "flute", "soprano-recorder", "alto-recorder", "oboe", "clarinet", "bassoon",
+                    "soprano-saxophone", "alto-saxophone", "tenor-saxophone", "baritone-saxophone", "harmonica", "trumpet", "horn",
+                    "trombone", "tuba", "guitar-nylon", "guitar-steel", "electric-guitar", "bass-guitar", "ukulele", "harp", "violin",
+                    "viola", "violoncello", "contrabass", "timpani", "glockenspiel", "xylophone", "vibraphone", "marimba", "drumset"};
+            for (String id : old) check(Instruments.byId(id) != null, "old id " + id);
+            for (String[] tm : Instruments.TEMPLATES) for (int i = 1; i < tm.length; i++) check(Instruments.byId(tm[i]) != null && Instruments.byId(tm[i]).listed, "template " + tm[i]);
+            Instruments.Def cl = Instruments.byId("bb-clarinet"), cla = Instruments.byId("a-clarinet");
+            check(cl.name.equals("Clarinet in B♭") && cl.longName.equals("Clarinet") && cla.label.equals("Clarinet in A"), "traits in names: " + cl.name + " / " + cla.label);
+            check(Instruments.byId("piano").clefs.length == 2 && Instruments.byId("organ").clefs.length == 3, "multi-staff instruments");
+            check(Instruments.byId("organ").clefs[2] == Clef.BASS, "organ pedal staff");
+            check(Instruments.byId("violoncello").clefs[0] == Clef.BASS && Instruments.byId("viola").clefs[0] == Clef.ALTO, "string clefs");
+            check(Instruments.byId("contrabass").clefs[0] == Clef.BASS_8VB && Instruments.byId("glockenspiel").clefs[0] == Clef.TREBLE_15MA, "concert-pitch octave clefs");
+            check(Instruments.byId("soprano-c-clef").clefs[0] == Clef.SOPRANO && Instruments.byId("baritone-c-clef").clefs[0] == Clef.BARITONE_C, "C clefs");
+            check(Instruments.byId("tambourine").drums && Instruments.byId("tambourine").clefs[0] == Clef.PERC, "unpitched percussion on the drum channel");
+            check(!Instruments.byId("bass-guitar-tablature").listed && Instruments.byId("bass-guitar-tablature").clefs[0] == Clef.BASS_8VB, "tablature as notation");
+            check(!Instruments.byId("double-bass").listed && !Instruments.byId("trumpet").listed, "aliases and placeholders stay out of the picker");
+            // search
+            check(Instruments.search(null, "bb clar").contains(cl) && Instruments.search(null, "clarinet in a").contains(cla), "search by trait");
+            check(Instruments.search(null, "laud").contains(Instruments.byId("laud")), "search ignores accents");
+            check(Instruments.search("Strings - Bowed", "").contains(Instruments.byId("violin")) && !Instruments.search("Strings - Bowed", "").contains(cl), "group filter");
+            check(Instruments.search(null, "zzzz").isEmpty() && Instruments.search(null, "").size() == Instruments.LISTED.size(), "search edges");
+            // MusicXML: the sound id decides between instruments that share a name
+            check(Instruments.forMusicXml("wind.reed.clarinet.a", "Clarinet") == cla, "musicxml sound id");
+            check(Instruments.forMusicXml(null, "Violoncello") == Instruments.byId("violoncello"), "musicxml name only");
+            check(Instruments.forMusicXml("wind.flutes.di-zi", "Dizi in G") == Instruments.byId("g-dizi"), "musicxml shared sound id");
+        }
+        // every picker instrument survives MuseScore and MusicXML round trips and lays out
+        {
+            List<Part> ps = new ArrayList<Part>();
+            for (Instruments.Def d : Instruments.LISTED) ps.add(d.create());
+            Score all = Score.create("Orchestra", "", ps, 4, 4, -3, 100, 2);
+            int st0 = 0;
+            for (Part ap : all.parts) {
+                for (int i = 0; i < ap.staves.size(); i++) {
+                    Voice v = all.measures.get(0).staves.get(st0 + i).voices[0];
+                    int clef = ap.staves.get(i).defaultClef;
+                    v.items.clear();
+                    Chord c = new Chord();
+                    c.type = Duration.WHOLE;
+                    c.addNote(new Note(Clef.middlePitch(clef), Pitch.spell(Clef.middlePitch(clef), -3)));
+                    v.items.add(c);
+                }
+                st0 += ap.staves.size();
+            }
+            String x = MscxWriter.write(all);
+            Score ar = MscxReader.read(x.getBytes("UTF-8")).score;
+            check(ar.parts.size() == ps.size() && ar.staffCount() == all.staffCount(), "all instruments mscx: parts " + ar.parts.size());
+            boolean same = true;
+            for (int i = 0; i < ps.size() && i < ar.parts.size(); i++) {
+                Part a = all.parts.get(i), b = ar.parts.get(i);
+                boolean ok = a.name.equals(b.name) && a.instrumentId.equals(b.instrumentId) && a.program == b.program && a.drums == b.drums
+                        && a.staves.size() == b.staves.size();
+                for (int k = 0; ok && k < a.staves.size(); k++) ok = a.staves.get(k).defaultClef == b.staves.get(k).defaultClef;
+                if (!ok) System.out.println("  mscx mismatch: " + a.instrumentId);
+                same &= ok;
+            }
+            check(same, "all instruments keep name, id, program, drums and clefs through .mscx");
+            check(MscxWriter.write(ar).equals(x), "all instruments mscx stable");
+            Score amr = MusicXmlReader.read(MusicXmlWriter.write(all).getBytes("UTF-8")).score;
+            same = amr.parts.size() == ps.size();
+            for (int i = 0; same && i < ps.size(); i++) {
+                Part a = all.parts.get(i), b = amr.parts.get(i);
+                // variants that differ only in their written clef ("Trombone (treble clef)") share name and sound id
+                Instruments.Def da = Instruments.byId(a.instrumentId), db = Instruments.byId(b.instrumentId);
+                boolean ok = (a.instrumentId.equals(b.instrumentId) || (db != null && da.name.equals(db.name) && da.musicXmlId.equals(db.musicXmlId)))
+                        && a.staves.size() == b.staves.size();
+                for (int k = 0; ok && k < a.staves.size(); k++) ok = a.staves.get(k).defaultClef == b.staves.get(k).defaultClef;
+                if (!ok) System.out.println("  musicxml mismatch: " + a.instrumentId + " -> " + b.instrumentId);
+                same &= ok;
+            }
+            check(same, "all instruments keep instrument and clefs through MusicXML");
+            Layout.Options lo = new Layout.Options();
+            DisplayList dl = Layout.layout(all, new TextMetrics() {
+                public float width(String text, int font, float sizeSp) {
+                    return text.length() * sizeSp * 0.5f;
+                }
+            }, lo);
+            check(dl != null, "all instruments lay out");
+        }
+        // clefs added for MuseScore's instruments: names, MusicXML and key signatures
+        {
+            int[] nc = {Clef.SOPRANO, Clef.MEZZO, Clef.BARITONE_C, Clef.TREBLE_15MA, Clef.BASS_8VA, Clef.BASS_15MA, Clef.BASS_15MB};
+            for (int c = 0; c < Clef.COUNT; c++) {
+                check(Clef.fromMscx(Clef.mscxName(c)) == c, "clef mscx " + Clef.mscxName(c));
+                check(Clef.fromMusicXml(Clef.musicXmlSign(c), Clef.musicXmlLine(c), Clef.musicXmlOctave(c)) == c, "clef musicxml " + Clef.label(c));
+                check(Clef.keySigLines(c, true).length == 7 && Clef.keySigLines(c, false).length == 7, "key sig lines " + c);
+            }
+            check(nc.length == Clef.COUNT - 8, "new clefs");
+            // middle C sits where the C clef points
+            check(Clef.line(Clef.SOPRANO, 60, 14) == 8 && Clef.line(Clef.MEZZO, 60, 14) == 6 && Clef.line(Clef.BARITONE_C, 60, 14) == 0, "C clef lines");
+            check(Clef.line(Clef.TREBLE_15MA, 88, 18) == Clef.line(Clef.TREBLE, 64, 18), "15ma reads two octaves up");
+            check(Clef.line(Clef.BASS_15MB, 33, 17) == Clef.line(Clef.BASS, 57, 17) && Clef.line(Clef.BASS_8VA, 69, 17) == Clef.line(Clef.BASS, 57, 17), "bass octave clefs");
+            // F sharp of the key signature on the F line/space of each clef
+            check(Clef.keySigLines(Clef.SOPRANO, true)[0] == Clef.line(Clef.SOPRANO, 65, 20), "soprano F#");
+            check(Clef.keySigLines(Clef.MEZZO, true)[0] == Clef.line(Clef.MEZZO, 65, 20), "mezzo F#");
+            check(Clef.keySigLines(Clef.BARITONE_C, true)[0] == Clef.line(Clef.BARITONE_C, 53, 20), "baritone C F#");
+            check(Clef.keySigLines(Clef.SOPRANO, false)[0] == Clef.line(Clef.SOPRANO, 70, 12), "soprano Bb");
+            check(Clef.keySigLines(Clef.BARITONE_C, false)[0] == Clef.line(Clef.BARITONE_C, 58, 12), "baritone C Bb");
+            check(Clef.fromMscx("G15mb") == Clef.TREBLE_8VB && Clef.fromMscx("TAB") == Clef.TREBLE_8VB && Clef.fromMscx("PERC2") == Clef.PERC, "clef fallbacks");
+        }
+
         // editor session (note input as the UI drives it)
         {
             io.github.vlesk.stave.edit.EditorState es = new io.github.vlesk.stave.edit.EditorState(pianoScore());
