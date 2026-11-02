@@ -11,9 +11,11 @@ Stave shows scores at concert pitch, so staves get the concert clef (<concertCle
 import sys
 import xml.etree.ElementTree as ET
 
-# Clef names Stave can engrave (model/Clef.java). Anything else is mapped to the nearest.
-CLEFS = {'G', 'F', 'C1', 'C2', 'C3', 'C4', 'C5', 'G8vb', 'G8va', 'G15ma', 'F8vb', 'F8va', 'F15mb', 'F15ma', 'PERC'}
-CLEF_FALLBACK = {'G15mb': 'G8vb', 'G_1': 'G', 'C4_8vb': 'C4', 'F_B': 'F', 'F_C': 'F', 'PERC2': 'PERC', 'TAB': 'G8vb'}
+# Clef names Stave can engrave (model/Clef.java): all of MuseScore's except the tablature clefs.
+CLEFS = {'G', 'F', 'C1', 'C2', 'C3', 'C4', 'C5', 'G8vb', 'G8va', 'G15ma', 'G15mb', 'G8vbo', 'G8vbp', 'G1', 'G8vbc',
+         'F8vb', 'F8va', 'F15mb', 'F15ma', 'F3', 'F5', 'F_F18C', 'F_19C', 'C_19C', 'C1_F18C', 'C3_F18C', 'C4_F18C',
+         'C1_F20C', 'C3_F20C', 'C4_F20C', 'C4_8VB', 'PERC', 'PERC2'}
+CLEF_FALLBACK = {'TAB': 'G8vb', 'TAB4': 'G8vb', 'TAB2': 'G8vb', 'TAB4_SERIF': 'G8vb'}
 
 
 def text(el, tag):

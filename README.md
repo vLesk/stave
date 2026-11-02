@@ -45,7 +45,7 @@ your phone and finish it on the desktop, or the other way round.
 | ↑/↓, Ctrl+↑/↓ transpose, `J` respell | Buttons, plus the same hardware-keyboard shortcuts |
 | Slurs (`S`) and hairpins (`<` `>`) | Same keys and toolbar buttons. In note input a slur or hairpin follows the notes you enter until pressed again; on a selected note each press extends it by one note. Hairpins shape playback volume, slurs play legato |
 | Grace notes | Grace button (long-press: acciaccatura, appoggiatura, 16th appoggiatura) adds one before the selected note; the next piano key sets its pitch |
-| Palettes (clefs, keys, times, accidentals, articulations, dynamics, barlines, text) | **Bottom-sheet palette** with large 76 dp cells and category chips |
+| Palettes (clefs, keys, times, accidentals, articulations, dynamics, barlines, text) | **Bottom-sheet palette** with large 76 dp cells and category chips. All 33 of MuseScore's standard-staff clefs (octave, C, French, 19th-century and percussion clefs); like MuseScore, glyphs Leland lacks are drawn from Bravura |
 | Lyrics (type, Space → next syllable, `-` hyphen, `_` melisma) | **Lyric entry mode, typed directly on the score** with the virtual or a hardware keyboard: Space moves to the next note, `-` and `_` work as in MuseScore. A bar above the keyboard has previous/next, `-`, `_` and **Done**. Hyphens and melisma lines are laid out as MuseScore does |
 | Chord symbols, staff text, tempo, rehearsal marks | Yes |
 | Repeats, double/final/dashed barlines, pickup measure | Yes |
@@ -175,7 +175,8 @@ app/src/main/java/io/github/vlesk/stave/
   audio/    playback timeline, MIDI writer, MediaPlayer playback, preview synth
   ui/       activities and custom views (score canvas, piano, palettes)
 tools/      build.sh, test.sh, robolectric.sh, simulate.sh (+ sim/extract.py), gen_glyphs.py,
-            gen_instruments.py (instrument catalog from MuseScore's instruments.xml)
+            gen_instruments.py (instrument catalog from MuseScore's instruments.xml),
+            gen_supplement_font.py (Bravura glyphs Leland lacks)
 test/       JVM tests, Java2D renderer, input simulation, Robolectric UI tests
 ```
 
@@ -183,7 +184,9 @@ test/       JVM tests, Java2D renderer, input simulation, Robolectric UI tests
 
 * Scores are shown and edited at concert pitch. Transposing-instrument display is not implemented yet,
   so variants such as Clarinet in B♭ and Clarinet in A differ only in name. Tablature instruments
-  are not offered (they open as standard notation).
+  are not offered (they open as standard notation), and neither are the four tablature clefs.
+* MusicXML has no clef style variants: French, 19th-century and parenthesised clefs export as
+  their plain form, as in MuseScore.
 * Not yet supported: other lines (8va, pedal, voltas, text lines), cross-staff notation, tablature,
   measure repeats and multi-measure rests. Imported files keep their notes but drop these elements;
   after import the app lists what it simplified (tablature, nested tuplets, measure repeats,
@@ -197,6 +200,7 @@ test/       JVM tests, Java2D renderer, input simulation, Robolectric UI tests
 ## License
 
 GPL-3.0, like MuseScore. The fonts (Leland, Edwin; © MuseScore Ltd) are under the SIL Open Font
-License 1.1, with license files in `app/src/main/assets/fonts`. The Material Symbols icons are
+License 1.1, with license files in `app/src/main/assets/fonts`. `StaveSupplement.otf` is a renamed
+subset of Bravura (© Steinberg Media Technologies, SIL OFL 1.1) with the six clef glyphs Leland lacks. The Material Symbols icons are
 Apache-2.0 (`third_party/MATERIAL-ICONS-LICENSE`). The instrument data comes from MuseScore's
 `instruments.xml` (GPL-3.0).

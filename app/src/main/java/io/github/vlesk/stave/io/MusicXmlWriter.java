@@ -144,7 +144,7 @@ public final class MusicXmlWriter {
                         if (nst > 1) x.open("clef", "number", String.valueOf(si + 1));
                         else x.open("clef");
                         x.tag("sign", Clef.musicXmlSign(c));
-                        if (c != Clef.PERC) x.tag("line", Clef.musicXmlLine(c));
+                        if (!Clef.isPercussion(c)) x.tag("line", Clef.musicXmlLine(c));
                         if (Clef.musicXmlOctave(c) != 0) x.tag("clef-octave-change", Clef.musicXmlOctave(c));
                         x.close();
                     }

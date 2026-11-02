@@ -11,6 +11,7 @@ import io.github.vlesk.stave.model.*;
 
 import io.github.vlesk.stave.engrave.DisplayList;
 import io.github.vlesk.stave.engrave.Layout;
+import io.github.vlesk.stave.engrave.Sym;
 import io.github.vlesk.stave.engrave.TextMetrics;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -396,26 +397,65 @@ public class ModelTests {
             }, lo);
             check(dl != null, "all instruments lay out");
         }
-        // clefs added for MuseScore's instruments: names, MusicXML and key signatures
+        // every MuseScore clef but the tablature ones: names, MusicXML and key signatures
         {
-            int[] nc = {Clef.SOPRANO, Clef.MEZZO, Clef.BARITONE_C, Clef.TREBLE_15MA, Clef.BASS_8VA, Clef.BASS_15MA, Clef.BASS_15MB};
+            check(Clef.COUNT == 33 && Clef.PALETTE.length == Clef.COUNT, "MuseScore clefs: " + Clef.COUNT + ", palette " + Clef.PALETTE.length);
+            java.util.Set<Integer> inPalette = new java.util.HashSet<Integer>();
+            for (int c : Clef.PALETTE) inPalette.add(c);
+            check(inPalette.size() == Clef.COUNT, "palette has every clef once");
             for (int c = 0; c < Clef.COUNT; c++) {
                 check(Clef.fromMscx(Clef.mscxName(c)) == c, "clef mscx " + Clef.mscxName(c));
-                check(Clef.fromMusicXml(Clef.musicXmlSign(c), Clef.musicXmlLine(c), Clef.musicXmlOctave(c)) == c, "clef musicxml " + Clef.label(c));
+                check(Layout.clefGlyph(c) >= 0, "clef glyph " + Clef.mscxName(c));
+                // MusicXML has no style variants (French, 19th century, parenthesised): they come back as the plain clef
+                int fromXml = Clef.fromMusicXml(Clef.musicXmlSign(c), Clef.musicXmlLine(c), Clef.musicXmlOctave(c));
+                check(Clef.topLineDiatonic(fromXml) == Clef.topLineDiatonic(c) && java.util.Arrays.equals(Clef.keySigLines(fromXml, true), Clef.keySigLines(c, true))
+                        && java.util.Arrays.equals(Clef.keySigLines(fromXml, false), Clef.keySigLines(c, false)), "clef musicxml " + Clef.name(c) + " -> " + Clef.name(fromXml));
                 check(Clef.keySigLines(c, true).length == 7 && Clef.keySigLines(c, false).length == 7, "key sig lines " + c);
+                // the key signature's F sharp and B flat sit on an F and a B of the clef
+                int fs = Clef.keySigLines(c, true)[0], bb = Clef.keySigLines(c, false)[0];
+                boolean onF = false, onB = false;
+                for (int oct = 0; oct < 9; oct++) {
+                    if (Clef.line(c, 5 + 12 * oct, 13) == fs || Clef.line(c, 6 + 12 * oct, 20) == fs) onF = true;
+                    if (Clef.line(c, 10 + 12 * oct, 12) == bb) onB = true;
+                }
+                check(Clef.isPercussion(c) || (onF && onB), "key signature lines of " + Clef.name(c));
             }
-            check(nc.length == Clef.COUNT - 8, "new clefs");
+            check(Clef.fromMusicXml("G", 1, 0) == Clef.FRENCH_VIOLIN && Clef.fromMusicXml("F", 3, 0) == Clef.BARITONE_F
+                    && Clef.fromMusicXml("F", 5, 0) == Clef.SUBBASS && Clef.fromMusicXml("C", 4, -1) == Clef.TENOR_8VB
+                    && Clef.fromMusicXml("G", 2, -2) == Clef.TREBLE_15MB, "musicxml clefs");
             // middle C sits where the C clef points
             check(Clef.line(Clef.SOPRANO, 60, 14) == 8 && Clef.line(Clef.MEZZO, 60, 14) == 6 && Clef.line(Clef.BARITONE_C, 60, 14) == 0, "C clef lines");
+            check(Clef.line(Clef.ALTO_F18C, 60, 14) == 4 && Clef.line(Clef.TENOR_8VB, 48, 14) == 2, "French and 8vb C clefs");
             check(Clef.line(Clef.TREBLE_15MA, 88, 18) == Clef.line(Clef.TREBLE, 64, 18), "15ma reads two octaves up");
+            check(Clef.line(Clef.TREBLE_15MB, 40, 18) == Clef.line(Clef.TREBLE, 64, 18) && Clef.line(Clef.TREBLE_8VB_PARENS, 64, 18) == Clef.line(Clef.TREBLE, 64, 18), "treble octave clefs");
+            check(Clef.line(Clef.FRENCH_VIOLIN, 67, 15) == 8, "French violin clef: G4 on the bottom line");
+            check(Clef.line(Clef.BARITONE_F, 53, 13) == 4 && Clef.line(Clef.SUBBASS, 53, 13) == 0, "F clefs on lines 3 and 5");
             check(Clef.line(Clef.BASS_15MB, 33, 17) == Clef.line(Clef.BASS, 57, 17) && Clef.line(Clef.BASS_8VA, 69, 17) == Clef.line(Clef.BASS, 57, 17), "bass octave clefs");
-            // F sharp of the key signature on the F line/space of each clef
-            check(Clef.keySigLines(Clef.SOPRANO, true)[0] == Clef.line(Clef.SOPRANO, 65, 20), "soprano F#");
-            check(Clef.keySigLines(Clef.MEZZO, true)[0] == Clef.line(Clef.MEZZO, 65, 20), "mezzo F#");
-            check(Clef.keySigLines(Clef.BARITONE_C, true)[0] == Clef.line(Clef.BARITONE_C, 53, 20), "baritone C F#");
-            check(Clef.keySigLines(Clef.SOPRANO, false)[0] == Clef.line(Clef.SOPRANO, 70, 12), "soprano Bb");
-            check(Clef.keySigLines(Clef.BARITONE_C, false)[0] == Clef.line(Clef.BARITONE_C, 58, 12), "baritone C Bb");
-            check(Clef.fromMscx("G15mb") == Clef.TREBLE_8VB && Clef.fromMscx("TAB") == Clef.TREBLE_8VB && Clef.fromMscx("PERC2") == Clef.PERC, "clef fallbacks");
+            check(Clef.glyphLine(Clef.C_19C) == 3 && Clef.glyphLine(Clef.PERC2) == 4 && Clef.glyphLine(Clef.FRENCH_VIOLIN) == 8, "glyph placement");
+            check(Clef.isPercussion(Clef.PERC2) && !Clef.isPercussion(Clef.TREBLE), "percussion clefs");
+            check(Sym.SUPPLEMENT[Layout.clefGlyph(Clef.ALTO_F18C)] && !Sym.SUPPLEMENT[Layout.clefGlyph(Clef.ALTO)], "glyphs Leland lacks come from the supplement");
+            check(Clef.fromMscx("TAB") == Clef.TREBLE_8VB && Clef.fromMscx("TAB4_SERIF") == Clef.TREBLE_8VB && Clef.fromMscx("PERC3") == Clef.PERC, "clef fallbacks");
+        }
+        // a clef change to every clef survives .mscx and lays out
+        {
+            List<Part> ps = new ArrayList<Part>();
+            ps.add(Instruments.byId("piano").create());
+            Score cs = Score.create("Clefs", "", ps, 4, 4, 2, 100, Clef.COUNT + 1);
+            for (int c = 0; c < Clef.COUNT; c++) cs.measures.get(c + 1).staves.get(0).clef = c == Clef.TREBLE ? Clef.BASS : c;
+            cs.measures.get(1).staves.get(0).clef = Clef.TREBLE_8VA;
+            String cx = MscxWriter.write(cs);
+            Score cr = MscxReader.read(cx.getBytes("UTF-8")).score;
+            boolean same = true;
+            for (int m = 1; m <= Clef.COUNT; m++) same &= cr.clefAt(0, m) == cs.clefAt(0, m);
+            check(same, "every clef through .mscx");
+            DisplayList cdl = Layout.layout(cs, new TextMetrics() {
+                public float width(String text, int font, float sizeSp) {
+                    return text.length() * sizeSp * 0.5f;
+                }
+            }, new Layout.Options());
+            int clefGlyphs = 0;
+            for (DisplayList.Item it : cdl.items) if (it.kind == DisplayList.GLYPH && Sym.NAMES[it.glyph].contains("Clef")) clefGlyphs++;
+            check(clefGlyphs >= Clef.COUNT, "every clef drawn: " + clefGlyphs);
         }
 
         // editor session (note input as the UI drives it)

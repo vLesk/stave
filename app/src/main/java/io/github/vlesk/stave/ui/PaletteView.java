@@ -28,6 +28,8 @@ public final class PaletteView extends LinearLayout {
         final boolean music;
         final Runnable action;
         float glyphScale = 1f;
+        /** For a music glyph Leland lacks: draw it with the supplementary font. */
+        boolean supplement;
 
         public Cell(String glyph, boolean music, String caption, String description, Runnable action) {
             this.glyph = glyph;
@@ -39,6 +41,11 @@ public final class PaletteView extends LinearLayout {
 
         public Cell scale(float s) {
             glyphScale = s;
+            return this;
+        }
+
+        public Cell supplement(boolean on) {
+            supplement = on;
             return this;
         }
     }
@@ -140,7 +147,7 @@ public final class PaletteView extends LinearLayout {
         CellView(Context c, Cell cell) {
             super(c);
             this.cell = cell;
-            gp.setTypeface(cell.music ? Theme.music(c) : Theme.textBold(c));
+            gp.setTypeface(cell.music ? (cell.supplement ? Theme.supplement(c) : Theme.music(c)) : Theme.textBold(c));
             gp.setTextAlign(Paint.Align.CENTER);
             gp.setColor(theme.onSurface);
             cp.setTextAlign(Paint.Align.CENTER);
