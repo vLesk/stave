@@ -112,6 +112,7 @@ public final class ScoreView extends View {
             @Override
             public boolean onDown(MotionEvent e) {
                 scroller.forceFinished(true);
+                dragMode = 0;
                 return true;
             }
 
@@ -128,12 +129,21 @@ public final class ScoreView extends View {
 
             @Override
             public boolean onScroll(MotionEvent e1, MotionEvent e2, float dx, float dy) {
+                if (dragMode == 0) {
+                    dragSystem = e1 == null ? -1 : systemAtY(toScoreY(e1.getY()));
+                    dragMode = maxScrollX(dragSystem) > 0 && Math.abs(dx) > Math.abs(dy) ? 2 : 1;
+                }
+                if (dragMode == 2) {
+                    setScrollX(dragSystem, scrollXOf(dragSystem) + dx / sp());
+                    return true;
+                }
                 scrollBy(dy);
                 return true;
             }
 
             @Override
             public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {
+                if (dragMode == 2) return true;
                 scroller.fling(0, (int) scrollYPx, 0, (int) -vy, 0, 0, 0, maxScroll());
                 postInvalidateOnAnimation();
                 return true;
@@ -197,18 +207,25 @@ public final class ScoreView extends View {
         return dl;
     }
 
+    private Layout.Cache layoutCache = new Layout.Cache();
+
     public void relayout(boolean force) {
         if (state == null || getWidth() == 0) return;
         if (!force && laidOutRevision == state.revision && laidOutWidth == getWidth() && laidOutZoom == zoom && laidOutScore == state.score) return;
         Layout.Options o = new Layout.Options();
         o.width = getWidth() / sp();
         o.marginX = Math.max(1.0f, theme.dp(12) / sp());
+        o.scrollWideSystems = true;
+        // reuse the engraving of measures an edit didn't touch; a different score starts afresh
+        if (laidOutScore != state.score) layoutCache = new Layout.Cache();
+        o.cache = layoutCache;
         dl = Layout.layout(state.score, renderer, o);
         laidOutRevision = state.revision;
         laidOutWidth = getWidth();
         laidOutZoom = zoom;
         laidOutScore = state.score;
         clampScroll();
+        keepSystemScroll();
     }
 
     /** Call after every edit. */
@@ -281,6 +298,13 @@ public final class ScoreView extends View {
     }
 
     /** Scrolls so that the given measure/staff is visible (used by input cursor and playback). */
+    /** As {@link #ensureVisible(int, int, boolean)}, and on a wide system also sideways to the tick. */
+    public void ensureVisible(int measure, int staff, int tick, boolean smooth) {
+        ensureVisible(measure, staff, smooth);
+        if (dl == null || measure < 0 || measure >= dl.measures.size() || dl.measures.get(measure) == null) return;
+        ensureXVisible(dl.measures.get(measure).system, dl.xAt(measure, tick));
+    }
+
     public void ensureVisible(int measure, int staff, boolean smooth) {
         if (dl == null || measure < 0 || measure >= dl.measures.size() || dl.measures.get(measure) == null) return;
         DisplayList.SystemInfo si = dl.systems.get(dl.measures.get(measure).system);
@@ -552,8 +576,90 @@ public final class ScoreView extends View {
         return true;
     }
 
-    private float toScoreX(float x) {
-        return x / sp();
+    private float toScoreX(float x, float y) {
+        return x / sp() + scrollXOf(systemAtY(toScoreY(y)));
+    }
+
+    // ------------------------------------------------------------------ wide systems (scrolled sideways)
+
+    /** Sideways scroll of each system in staff spaces; only systems wider than the screen move. */
+    private float[] sysScroll = new float[0];
+    /** Current drag: 0 undecided, 1 vertical, 2 sideways (of dragSystem). */
+    private int dragMode, dragSystem;
+
+    /** The system a score y belongs to: bands split halfway between systems. */
+    private int systemAtY(float sy) {
+        if (dl == null || dl.systems.isEmpty()) return -1;
+        for (int i = 0; i + 1 < dl.systems.size(); i++) {
+            if (sy < (dl.systems.get(i).bottom + dl.systems.get(i + 1).top) / 2) return i;
+        }
+        return dl.systems.size() - 1;
+    }
+
+    private float bandTop(int i) {
+        return i <= 0 ? -1e6f : (dl.systems.get(i - 1).bottom + dl.systems.get(i).top) / 2;
+    }
+
+    private float bandBottom(int i) {
+        return i + 1 >= dl.systems.size() ? 1e6f : (dl.systems.get(i).bottom + dl.systems.get(i + 1).top) / 2;
+    }
+
+    private float scrollXOf(int sys) {
+        return sys >= 0 && sys < sysScroll.length ? sysScroll[sys] : 0;
+    }
+
+    private float maxScrollX(int sys) {
+        if (dl == null || sys < 0 || sys >= dl.systems.size() || !dl.systems.get(sys).wide) return 0;
+        return Math.max(0, dl.systems.get(sys).x1 + 1.5f - getWidth() / sp());
+    }
+
+    private void setScrollX(int sys, float v) {
+        if (sys < 0 || sys >= sysScroll.length) return;
+        sysScroll[sys] = Math.max(0, Math.min(maxScrollX(sys), v));
+        invalidate();
+    }
+
+    /** Keeps the sideways scroll of every system after a new layout, within its new range. */
+    private void keepSystemScroll() {
+        if (dl == null) return;
+        float[] n = new float[dl.systems.size()];
+        for (int i = 0; i < n.length; i++) n[i] = Math.max(0, Math.min(maxScrollX(i), i < sysScroll.length ? sysScroll[i] : 0));
+        sysScroll = n;
+    }
+
+    /** Scrolls a wide system sideways so that x (staff spaces) is in view. */
+    private void ensureXVisible(int sys, float x) {
+        if (maxScrollX(sys) <= 0) return;
+        float view = getWidth() / sp(), cur = scrollXOf(sys);
+        if (x < cur + 2f) setScrollX(sys, x - 3f);
+        else if (x > cur + view - 4f) setScrollX(sys, x - view + 5f);
+    }
+
+    /** Chevrons at the edges of a wide system that has more to see on that side. */
+    private void drawWideHints(Canvas c, int sys, float sp) {
+        float max = maxScrollX(sys);
+        if (max <= 0) return;
+        DisplayList.SystemInfo si = dl.systems.get(sys);
+        float midY = (si.staffY[0] + si.staffY[si.staffY.length - 1] + 4) / 2 * sp;
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(Theme.alpha(theme.voice[0], 0.55f));
+        float w = theme.dp(10), h = theme.dp(14);
+        android.graphics.Path path = new android.graphics.Path();
+        if (scrollXOf(sys) < max - 0.01f) {
+            float x = getWidth() - theme.dp(6);
+            path.moveTo(x - w, midY - h);
+            path.lineTo(x, midY);
+            path.lineTo(x - w, midY + h);
+            path.close();
+        }
+        if (scrollXOf(sys) > 0.01f) {
+            float x = theme.dp(6);
+            path.moveTo(x + w, midY - h);
+            path.lineTo(x, midY);
+            path.lineTo(x + w, midY + h);
+            path.close();
+        }
+        c.drawPath(path, p);
     }
 
     private float toScoreY(float y) {
@@ -573,7 +679,7 @@ public final class ScoreView extends View {
     }
 
     private boolean startGhost(float x, float y) {
-        float sx = toScoreX(x), sy = toScoreY(y);
+        float sx = toScoreX(x, y), sy = toScoreY(y);
         int[] hit = staffAt(sx, sy, 3.0f, 3.0f);
         if (hit == null) return false;
         ghostStaff = hit[1];
@@ -666,7 +772,7 @@ public final class ScoreView extends View {
 
     private void handleTap(float x, float y) {
         if (dl == null || state == null) return;
-        float sx = toScoreX(x), sy = toScoreY(y);
+        float sx = toScoreX(x, y), sy = toScoreY(y);
         DisplayList.Hit lyric = findLyricHit(sx, sy);
         if (lyric == null && state.lyricEdit) {
             // lyric entry mode: a tap on a note moves typing to it, any other tap is ignored
@@ -683,7 +789,7 @@ public final class ScoreView extends View {
             ensureLyricVisible();
             return;
         }
-        DisplayList.Hit h = findHit(toScoreX(x), toScoreY(y));
+        DisplayList.Hit h = findHit(toScoreX(x, y), toScoreY(y));
         if (h == null) {
             state.clearSelection();
         } else if (h.cr == null) {
@@ -700,7 +806,7 @@ public final class ScoreView extends View {
 
     private void handleLongPress(float x, float y) {
         if (dl == null || state == null || state.lyricEdit) return;
-        DisplayList.Hit h = findHit(toScoreX(x), toScoreY(y));
+        DisplayList.Hit h = findHit(toScoreX(x, y), toScoreY(y));
         if (h == null) return;
         if (state.hasSelection()) state.extendTo(h.pos.measure, h.pos.staff);
         else state.selectMeasure(h.pos.measure, h.pos.staff);
@@ -732,8 +838,6 @@ public final class ScoreView extends View {
             y0 -= getHeight() / sp;
             y1 += getHeight() / sp;
         }
-        drawRangeSelection(c, sp);
-        drawCursor(c, sp);
         Set<Object> sel = new HashSet<Object>();
         Note selNote = null;
         if (state.selKind == EditorState.SEL_NOTE) selNote = state.selectedNote();
@@ -747,10 +851,25 @@ public final class ScoreView extends View {
                 }
             }
         }
-        renderer.draw(c, dl, sp, y0, y1, ScoreRenderer.setHighlighter(sel, selNote, theme.voice, playing, theme.playback));
-        drawPlayLine(c, sp);
-        drawLyricCaret(c, sp);
-        drawGhost(c, sp);
+        ScoreRenderer.Highlighter hl = ScoreRenderer.setHighlighter(sel, selNote, theme.voice, playing, theme.playback);
+        // each visible system with its own sideways offset, clipped to its band
+        int first = Math.max(0, systemAtY(y0)), last = systemAtY(y1);
+        for (int si = first; si <= last && si >= 0; si++) {
+            float off = scrollXOf(si) * sp;
+            float bt = Math.max(bandTop(si), y0 - 20), bb = Math.min(bandBottom(si), y1 + 20);
+            c.save();
+            c.clipRect(-1e5f, bt * sp, 1e6f, bb * sp);
+            c.translate(-off, 0);
+            drawRangeSelection(c, sp);
+            drawCursor(c, sp);
+            renderer.draw(c, dl, sp, bt, bb, hl);
+            drawPlayLine(c, sp);
+            drawLyricCaret(c, sp);
+            drawGhost(c, sp, off);
+            c.restore();
+            drawWideHints(c, si, sp);
+        }
+        if (last < 0) renderer.draw(c, dl, sp, y0, y1, hl);
         c.restore();
     }
 
@@ -813,7 +932,7 @@ public final class ScoreView extends View {
         c.drawRoundRect(rect, theme.dp(3), theme.dp(3), p);
     }
 
-    private void drawGhost(Canvas c, float sp) {
+    private void drawGhost(Canvas c, float sp, float offPx) {
         if (!ghostActive) return;
         DisplayList.MeasureInfo mi = dl.measures.get(ghostMeasure);
         DisplayList.SystemInfo s = dl.systems.get(mi.system);
@@ -837,7 +956,7 @@ public final class ScoreView extends View {
         int pitch = pitchForLine(ghostMeasure, ghostStaff, ghostLine);
         int tpc = Pitch.spell(pitch, state.score.keyAt(ghostMeasure));
         String label = Pitch.name(pitch, tpc);
-        float bx = ghostFingerX, by = ghostFingerY + scrollYPx - theme.dp(72);
+        float bx = ghostFingerX + offPx, by = ghostFingerY + scrollYPx - theme.dp(72);
         float w = bubbleText.measureText(label) + theme.dp(24);
         rect.set(bx - w / 2, by - theme.dp(22), bx + w / 2, by + theme.dp(14));
         c.drawRoundRect(rect, theme.dp(18), theme.dp(18), bubblePaint);

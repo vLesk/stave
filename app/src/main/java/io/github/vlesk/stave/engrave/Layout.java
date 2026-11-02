@@ -12,6 +12,7 @@ import io.github.vlesk.stave.model.Note;
 import io.github.vlesk.stave.model.Part;
 import io.github.vlesk.stave.model.Pitch;
 import io.github.vlesk.stave.model.Pos;
+import io.github.vlesk.stave.model.Staff;
 import io.github.vlesk.stave.model.Spanners;
 import io.github.vlesk.stave.model.Syllables;
 import io.github.vlesk.stave.model.Rest;
@@ -44,6 +45,41 @@ public final class Layout {
         public float pageHeight;
         public float marginBottom = 3f;
         public float systemGap = 5f;
+        /**
+         * In the editor: a system that would need squeezing by more than 10% keeps its natural width
+         * (marked {@link DisplayList.SystemInfo#wide}) and is scrolled sideways instead. Off for
+         * printing and export, where it is squeezed to the page.
+         */
+        public boolean scrollWideSystems;
+        /**
+         * Reuse between layouts of the same score (the editor passes one per view): measures and
+         * whole systems whose content, neighbours and position did not change are not laid out again.
+         */
+        public Cache cache;
+    }
+
+    /**
+     * What a layout leaves for the next one: per measure its preparation and accidentals, per system
+     * its staves before vertical placement. Entries are keyed by signatures that cover the content of
+     * the measures concerned, the identity of their objects, their neighbours and the layout options,
+     * so a hit gives exactly what a fresh layout would. Only the last layout's entries are kept.
+     */
+    public static final class Cache {
+        IdentityHashMap<Measure, PrepEntry> preps = new IdentityHashMap<Measure, PrepEntry>();
+        HashMap<Long, SystemEntry> systems = new HashMap<Long, SystemEntry>();
+        /** Statistics of the last layout (for tests): measures and systems reused or laid out. */
+        public int prepHits, prepMisses, systemHits, systemMisses;
+    }
+
+    private static final class PrepEntry {
+        long key;
+        MPrep prep;
+        List<Object[]> accidentals;
+    }
+
+    private static final class SystemEntry {
+        StaffGen[] gens;
+        List<Object[]> recs;
     }
 
     // --------------------------------------------------------------------------- data
@@ -338,13 +374,30 @@ public final class Layout {
     private void computeAccidentals() {
         for (int m = 0; m < s.measures.size(); m++) {
             Measure mm = s.measures.get(m);
+            PrepEntry hit = o.cache == null ? null : o.cache.preps.get(mm);
+            if (hit != null && hit.key == prepKey(m)) {
+                for (Object[] a : hit.accidentals) accidental.put((Note) a[0], (Integer) a[1]);
+                continue;
+            }
+            accidentalLog = o.cache == null ? null : new ArrayList<Object[]>();
+            computeAccidentals(m, mm);
+            if (o.cache != null) pendingAccidentals.put(mm, accidentalLog);
+            accidentalLog = null;
+        }
+    }
+
+    private List<Object[]> accidentalLog;
+    private final IdentityHashMap<Measure, List<Object[]>> pendingAccidentals = new IdentityHashMap<Measure, List<Object[]>>();
+
+    private void computeAccidentals(int m, Measure mm) {
+        {
             for (int st = 0; st < staffCount; st++) {
                 if (isDrums(st)) continue;
                 // collect (tick, note) in time order across voices
                 List<Object[]> evs = new ArrayList<Object[]>();
                 for (int v = 0; v < StaffMeasure.VOICES; v++) {
                     Voice voice = mm.staves.get(st).voices[v];
-                    int[] starts = voice.starts();
+                    int[] starts = startsOf(voice);
                     for (int i = 0; i < voice.items.size(); i++) {
                         ChordRest cr = voice.items.get(i);
                         if (!(cr instanceof Chord)) continue;
@@ -372,7 +425,10 @@ public final class Layout {
                         state.put(dia, alter);
                         continue;
                     }
-                    if (alter != curAlter || n.forceAccidental) accidental.put(n, accGlyph(alter));
+                    if (alter != curAlter || n.forceAccidental) {
+                        accidental.put(n, accGlyph(alter));
+                        if (accidentalLog != null) accidentalLog.add(new Object[]{n, accGlyph(alter)});
+                    }
                     state.put(dia, alter);
                 }
             }
@@ -411,6 +467,30 @@ public final class Layout {
     private void prepareMeasures() {
         for (int m = 0; m < s.measures.size(); m++) {
             Measure mm = s.measures.get(m);
+            long key = o.cache != null ? prepKey(m) : 0;
+            PrepEntry hit = o.cache == null ? null : o.cache.preps.get(mm);
+            if (hit != null && hit.key == key) {
+                preps.add(hit.prep);
+                next.preps.put(mm, hit);
+                o.cache.prepHits++;
+                continue;
+            }
+            MPrep p = prepareMeasure(m, mm);
+            preps.add(p);
+            if (o.cache != null) {
+                o.cache.prepMisses++;
+                PrepEntry e = new PrepEntry();
+                e.key = key;
+                e.prep = p;
+                e.accidentals = pendingAccidentals.get(mm);
+                if (e.accidentals == null) e.accidentals = new ArrayList<Object[]>();
+                next.preps.put(mm, e);
+            }
+        }
+    }
+
+    private MPrep prepareMeasure(int m, Measure mm) {
+        {
             MPrep p = new MPrep();
             Measure prev = m > 0 ? s.measures.get(m - 1) : null;
             p.showTime = prev == null || prev.timeN != mm.timeN || prev.timeD != mm.timeD || prev.timeSymbol != mm.timeSymbol;
@@ -428,7 +508,7 @@ public final class Layout {
             boolean allRests = true;
             for (int st = 0; st < staffCount; st++) {
                 for (Voice v : mm.staves.get(st).voices) {
-                    int[] starts = v.starts();
+                    int[] starts = startsOf(v);
                     for (int i = 0; i < v.items.size(); i++) {
                         ChordRest cr = v.items.get(i);
                         if (cr instanceof Rest && ((Rest) cr).measureRest) continue;
@@ -449,10 +529,10 @@ public final class Layout {
                 float acc = 0;
                 float lyricW = 0, lyricLead = 0;
                 for (int st = 0; st < staffCount; st++) {
-                    int clef = s.clefAt(st, m);
+                    int clef = clefAt(st, m);
                     for (int vi = 0; vi < StaffMeasure.VOICES; vi++) {
                         Voice v = mm.staves.get(st).voices[vi];
-                        int idx = v.indexAt(c.tick);
+                        int idx = indexAt(v, c.tick);
                         if (idx < 0) continue;
                         ChordRest cr = v.items.get(idx);
                         if (cr.dots > 0) right = Math.max(right, HEAD_W + 0.5f + 0.5f * cr.dots + 0.3f);
@@ -471,7 +551,7 @@ public final class Layout {
                             float gw = graceWidth(ch, s.keyAt(m));
                             if (gw > 0) acc = Math.max(acc, (accs > 0 ? 0.3f + Math.min(accs, 3) * 1.15f : 0) + gw);
                             if (second) right += HEAD_W;
-                            if (ch.lyric != null && v.starts()[idx] == c.tick) {
+                            if (ch.lyric != null && startsOf(v)[idx] == c.tick) {
                                 // keep neighbouring lyrics apart by MuseScore's gap (more when a dash has to fit
                                 // between them), using where each one really sits: centred, or left-aligned
                                 // when it carries a melisma
@@ -508,7 +588,7 @@ public final class Layout {
             if (mm.startRepeat) w += 1.3f;
             if (mm.endBarline == Measure.BAR_END_REPEAT) w += 1.3f;
             p.natural = w;
-            preps.add(p);
+            return p;
         }
     }
 
@@ -541,7 +621,7 @@ public final class Layout {
 
     private float systemHeaderWidth(int m) {
         float clefW = 0;
-        for (int st = 0; st < staffCount; st++) clefW = Math.max(clefW, clefWidth(s.clefAt(st, m)));
+        for (int st = 0; st < staffCount; st++) clefW = Math.max(clefW, clefWidth(clefAt(st, m)));
         Measure mm = s.measures.get(m);
         float w = 0.6f + clefW + keySigWidth(mm.keyFifths, 0) + (mm.keyFifths == 0 ? 0 : 0);
         if (preps.get(m).showTime) w += timeSigWidth(mm);
@@ -551,7 +631,172 @@ public final class Layout {
     /** Slurs and hairpins of the score, resolved once per layout. */
     private List<Spanners.Span> spans;
 
+    /** Clef of every staff in every measure, and where each measure starts: looked up per note, so precomputed. */
+    private int[][] clefs;
+    private int[] measureStart;
+
+    // --------------------------------------------------------------------------- signatures (layout cache)
+
+    private static long mix(long h, long v) {
+        h ^= v;
+        h *= 0x100000001b3L;
+        return h ^ (h >>> 29);
+    }
+
+    private static long mixS(long h, String str) {
+        return mix(h, str == null ? 0x5bd1e995L : ((long) str.hashCode() << 16) ^ str.length());
+    }
+
+    /**
+     * Everything about a measure that layout reads, and the identity of its objects (the display list
+     * points to them). Keep in step with the model: ModelTests checks the fields of these classes.
+     */
+    static long measureSig(Measure mm) {
+        long h = 0xcbf29ce484222325L;
+        h = mix(h, System.identityHashCode(mm));
+        h = mix(h, mm.timeN);
+        h = mix(h, mm.timeD);
+        h = mix(h, mm.timeSymbol ? 1 : 0);
+        h = mix(h, mm.keyFifths);
+        h = mix(h, mm.startRepeat ? 1 : 0);
+        h = mix(h, mm.endBarline);
+        h = mix(h, mm.tempo);
+        h = mixS(h, mm.tempoText);
+        h = mixS(h, mm.rehearsal);
+        h = mix(h, mm.actualTicks);
+        h = mix(h, mm.irregular ? 1 : 0);
+        for (StaffMeasure sm : mm.staves) {
+            h = mix(h, System.identityHashCode(sm));
+            h = mix(h, sm.clef);
+            for (Voice v : sm.voices) {
+                h = mix(h, System.identityHashCode(v));
+                h = mix(h, v.items.size());
+                for (ChordRest cr : v.items) h = chordRestSig(h, cr);
+            }
+        }
+        return h;
+    }
+
+    private static long chordRestSig(long h, ChordRest cr) {
+        h = mix(h, System.identityHashCode(cr));
+        h = mix(h, cr.type);
+        h = mix(h, cr.dots);
+        if (cr.tuplet != null) {
+            h = mix(h, System.identityHashCode(cr.tuplet));
+            h = mix(h, cr.tuplet.actual);
+            h = mix(h, cr.tuplet.normal);
+            h = mix(h, cr.tuplet.baseType);
+        }
+        h = mixS(h, cr.dynamic);
+        h = mixS(h, cr.chordSymbol);
+        h = mixS(h, cr.lyric);
+        h = mix(h, cr.melisma);
+        for (String a : cr.articulations) h = mixS(h, a);
+        h = mixS(h, cr.staffText);
+        h = mix(h, cr.slurTicks);
+        h = mix(h, cr.hairpin);
+        h = mix(h, cr.hairpinTicks);
+        if (cr instanceof Rest) {
+            h = mix(h, ((Rest) cr).measureRest ? 1 : 0);
+            h = mix(h, ((Rest) cr).measureTicks);
+        } else {
+            Chord c = (Chord) cr;
+            h = mix(h, c.stemDir);
+            h = mix(h, c.graceKind);
+            for (Note n : c.notes) {
+                h = mix(h, System.identityHashCode(n));
+                h = mix(h, n.pitch);
+                h = mix(h, n.tpc);
+                h = mix(h, n.tieForward ? 1 : 0);
+                h = mix(h, n.forceAccidental ? 1 : 0);
+            }
+            h = mix(h, c.graces.size());
+            for (Chord gr : c.graces) h = chordRestSig(h, gr);
+        }
+        return h;
+    }
+
+    private long sigAt(int m) {
+        return m >= 0 && m < sig.length ? sig[m] : 0x9e3779b97f4a7c15L;
+    }
+
+    /** Key for a measure's preparation: it reads its neighbours (ties, key and time changes, lyrics) and the clefs. */
+    private long prepKey(int m) {
+        long h = mix(globalSig, sigAt(m - 1));
+        h = mix(h, sigAt(m));
+        h = mix(h, sigAt(m + 1));
+        for (int st = 0; st < staffCount; st++) h = mix(h, clefAt(st, m) * 31L + (m > 0 ? clefAt(st, m - 1) : -1));
+        return h;
+    }
+
+    /** Element start ticks per voice, computed once per layout (the score does not change during it). */
+    private final IdentityHashMap<Voice, int[]> startsCache = new IdentityHashMap<Voice, int[]>();
+
+    private int[] startsOf(Voice v) {
+        int[] st = startsCache.get(v);
+        if (st == null) startsCache.put(v, st = v.starts());
+        return st;
+    }
+
+    /** Index of the element starting exactly at tick (binary search on the cached starts), or -1. */
+    private int indexAt(Voice v, int tick) {
+        int i = java.util.Arrays.binarySearch(startsOf(v), 0, v.items.size(), tick);
+        return i >= 0 ? i : -1;
+    }
+
+    private int clefAt(int st, int m) {
+        int[] c = clefs[st];
+        return c[Math.max(0, Math.min(m, c.length - 1))];
+    }
+
+    private int globalTick(int m, int tick) {
+        return (m < measureStart.length ? measureStart[m] : measureStart[measureStart.length - 1]) + tick;
+    }
+
+    /** Signature of each measure (content and object identity), and of everything global. */
+    private long[] sig;
+    private long globalSig;
+    private Cache next;
+
+    private void precompute() {
+        int mc = s.measures.size();
+        sig = new long[mc];
+        for (int m = 0; m < mc; m++) sig[m] = measureSig(s.measures.get(m));
+        long g = 0xcbf29ce484222325L;
+        g = mix(g, System.identityHashCode(tm));
+        g = mix(g, Float.floatToIntBits(o.width));
+        g = mix(g, Float.floatToIntBits(o.marginX));
+        g = mix(g, Float.floatToIntBits(o.pageHeight));
+        g = mix(g, o.scrollWideSystems ? 1 : 0);
+        g = mix(g, staffCount);
+        for (Part p : s.parts) {
+            g = mix(g, System.identityHashCode(p));
+            g = mixS(g, p.name);
+            g = mixS(g, p.shortName);
+            g = mix(g, p.drums ? 1 : 0);
+            g = mix(g, p.staves.size());
+            for (Staff st : p.staves) g = mix(g, st.defaultClef);
+        }
+        globalSig = g;
+        if (o.cache != null) {
+            next = new Cache();
+            o.cache.prepHits = o.cache.prepMisses = o.cache.systemHits = o.cache.systemMisses = 0;
+        }
+        clefs = new int[staffCount][Math.max(1, mc)];
+        for (int st = 0; st < staffCount; st++) {
+            int cur = s.staff(st).defaultClef;
+            for (int m = 0; m < mc; m++) {
+                int c = s.measures.get(m).staves.get(st).clef;
+                if (c >= 0) cur = c;
+                clefs[st][m] = cur;
+            }
+        }
+        measureStart = new int[mc + 1];
+        for (int m = 0; m < mc; m++) measureStart[m + 1] = measureStart[m] + s.measures.get(m).ticks();
+    }
+
     private void run() {
+        precompute();
         spans = Spanners.all(s);
         computeAccidentals();
         prepareMeasures();
@@ -604,6 +849,10 @@ public final class Layout {
         drawTies();
         drawSlurs();
         drawLyricLines();
+        if (o.cache != null) {
+            o.cache.preps = next.preps;
+            o.cache.systems = next.systems;
+        }
         if (o.pageHeight > 0) dl.height = (page + 1) * o.pageHeight;
         else dl.height = y + 2;
     }
@@ -720,6 +969,10 @@ public final class Layout {
         // the fixed parts (header, bar padding) stay; the columns share what is left
         float fixed = x - (left + header) - colSum;
         squeeze = Math.max(0.3f, (limit - left - header - fixed) / colSum);
+        if (o.scrollWideSystems && squeeze < 0.9f) {
+            si.wide = true;
+            break;
+        }
         }
         // the last measure ends exactly at the system end when justified
         if (ratio > 0) {
@@ -730,11 +983,33 @@ public final class Layout {
         DisplayList.MeasureInfo lastMi = dl.measures.get(m1);
         si.x1 = lastMi.x + lastMi.width;
 
-        // generate staves
+        // generate staves, or reuse them from the last layout when nothing they depend on changed
         StaffGen[] gens = new StaffGen[staffCount];
-        for (int st = 0; st < staffCount; st++) {
-            gens[st] = new StaffGen();
-            genStaff(gens[st], sysIdx, st, m0, m1, left, si);
+        long key = o.cache != null ? systemKey(sysIdx, m0, m1, left, header, ratio, si) : 0;
+        SystemEntry hit = o.cache == null ? null : o.cache.systems.get(key);
+        if (hit != null) {
+            for (int st = 0; st < staffCount; st++) gens[st] = cloneGen(hit.gens[st]);
+            for (Object[] r : hit.recs) {
+                NoteRec c = cloneRec((NoteRec) r[1]);
+                c.system = sysIdx;
+                pendingRecs.put((Note) r[0], c);
+            }
+            next.systems.put(key, hit);
+            o.cache.systemHits++;
+        } else {
+            for (int st = 0; st < staffCount; st++) {
+                gens[st] = new StaffGen();
+                genStaff(gens[st], sysIdx, st, m0, m1, left, si);
+            }
+            if (o.cache != null) {
+                o.cache.systemMisses++;
+                SystemEntry e = new SystemEntry();
+                e.gens = new StaffGen[staffCount];
+                for (int st = 0; st < staffCount; st++) e.gens[st] = cloneGen(gens[st]);
+                e.recs = new ArrayList<Object[]>();
+                for (Map.Entry<Note, NoteRec> r : pendingRecs.entrySet()) e.recs.add(new Object[]{r.getKey(), cloneRec(r.getValue())});
+                next.systems.put(key, e);
+            }
         }
         // vertical placement
         si.staffY = new float[staffCount];
@@ -783,6 +1058,90 @@ public final class Layout {
         systemDecorations(sysIdx, si, m0, m1, left);
         dl.systems.add(si);
         return si.bottom;
+    }
+
+    /** Everything a system's staves depend on: its measures and their neighbours, position, clefs, lines through it. */
+    private long systemKey(int sysIdx, int m0, int m1, float left, float header, float ratio, DisplayList.SystemInfo si) {
+        long h = mix(globalSig, m1 - m0);
+        h = mix(h, sysIdx == 0 ? 1 : 0);
+        h = mix(h, Float.floatToIntBits(left));
+        h = mix(h, Float.floatToIntBits(header));
+        h = mix(h, Float.floatToIntBits(ratio));
+        h = mix(h, Float.floatToIntBits(si.x0));
+        h = mix(h, Float.floatToIntBits(si.x1));
+        h = mix(h, si.wide ? 1 : 0);
+        h = mix(h, s.measureNumber(m0));
+        for (int m = m0 - 1; m <= m1 + 1; m++) h = mix(h, sigAt(m));
+        for (int st = 0; st < staffCount; st++) h = mix(h, clefAt(st, m0));
+        for (int m = m0; m <= m1; m++) {
+            DisplayList.MeasureInfo mi = dl.measures.get(m);
+            h = mix(h, Float.floatToIntBits(mi.x));
+            h = mix(h, Float.floatToIntBits(mi.width));
+        }
+        int sysStart = globalTick(m0, 0), sysEnd = globalTick(m1, s.measures.get(m1).ticks());
+        for (Spanners.Span sp : spans) {
+            if (sp.kind == 0 || sp.startTick >= sysEnd || sp.endTick <= sysStart) continue;
+            h = mix(h, sp.kind * 1000003L + sp.staff * 31 + sp.voice);
+            h = mix(h, sp.startTick - sysStart);
+            h = mix(h, sp.endTick - sysStart);
+        }
+        return h;
+    }
+
+    private static DisplayList.Item cloneItem(DisplayList.Item a) {
+        DisplayList.Item b = new DisplayList.Item();
+        b.kind = a.kind;
+        b.x = a.x;
+        b.y = a.y;
+        b.x2 = a.x2;
+        b.y2 = a.y2;
+        b.w = a.w;
+        b.glyph = a.glyph;
+        b.text = a.text;
+        b.font = a.font;
+        b.align = a.align;
+        b.pts = a.pts == null ? null : a.pts.clone();
+        b.color = a.color;
+        b.owner = a.owner;
+        b.note = a.note;
+        b.voice = a.voice;
+        return b;
+    }
+
+    private static DisplayList.Hit cloneHit(DisplayList.Hit a) {
+        DisplayList.Hit b = new DisplayList.Hit();
+        b.x0 = a.x0;
+        b.y0 = a.y0;
+        b.x1 = a.x1;
+        b.y1 = a.y1;
+        b.pos = a.pos == null ? null : a.pos.copy();
+        b.cr = a.cr;
+        b.note = a.note;
+        b.noteIdx = a.noteIdx;
+        b.baseline = a.baseline;
+        b.grace = a.grace;
+        return b;
+    }
+
+    private static StaffGen cloneGen(StaffGen a) {
+        StaffGen b = new StaffGen();
+        for (DisplayList.Item it : a.items) b.items.add(cloneItem(it));
+        for (DisplayList.Hit h : a.hits) b.hits.add(cloneHit(h));
+        for (DisplayList.Hit h : a.lyricHits) b.lyricHits.add(cloneHit(h));
+        b.top = a.top;
+        b.bottom = a.bottom;
+        return b;
+    }
+
+    private static NoteRec cloneRec(NoteRec a) {
+        NoteRec b = new NoteRec();
+        b.system = a.system;
+        b.x = a.x;
+        b.y = a.y;
+        b.headW = a.headW;
+        b.tieUp = a.tieUp;
+        b.staff = a.staff;
+        return b;
     }
 
     private boolean hasTempoOrRehearsal(int m0, int m1) {
@@ -842,13 +1201,13 @@ public final class Layout {
         }
         // system header
         float hx = left + 0.6f;
-        int clef = s.clefAt(st, m0);
+        int clef = clefAt(st, m0);
         glyph(g.items, clefGlyph(clef), hx, Clef.glyphLine(clef) * 0.5f);
         g.ext(-1.5f, 5.5f);
         hx += clefWidth(clef);
         Measure first = s.measures.get(m0);
         float maxClef = 0;
-        for (int k = 0; k < staffCount; k++) maxClef = Math.max(maxClef, clefWidth(s.clefAt(k, m0)));
+        for (int k = 0; k < staffCount; k++) maxClef = Math.max(maxClef, clefWidth(clefAt(k, m0)));
         hx = left + 0.6f + maxClef;
         if (first.keyFifths != 0) {
             drawKeySig(g, clef, first.keyFifths, 0, hx);
@@ -871,7 +1230,7 @@ public final class Layout {
                 for (int k = 0; k < staffCount; k++) if (p.clefChange[k] >= 0) clefW = Math.max(clefW, clefWidth(p.clefChange[k]) * 0.8f);
                 x += clefW;
                 if (p.showKey) {
-                    drawKeySig(g, s.clefAt(st, m), mm.keyFifths, p.oldKey, x);
+                    drawKeySig(g, clefAt(st, m), mm.keyFifths, p.oldKey, x);
                     x += keySigWidth(mm.keyFifths, p.oldKey);
                 }
                 if (p.showTime) drawTimeSig(g, mm, x, timeSigWidth(mm));
@@ -884,13 +1243,13 @@ public final class Layout {
     private void genMeasureContent(StaffGen g, int sysIdx, int st, int m, DisplayList.MeasureInfo mi) {
         Measure mm = s.measures.get(m);
         StaffMeasure sm = mm.staves.get(st);
-        int clef = s.clefAt(st, m);
+        int clef = clefAt(st, m);
         boolean drums = isDrums(st);
         int voicesUsed = nonEmptyVoices(sm);
         for (int v = 0; v < StaffMeasure.VOICES; v++) {
             Voice voice = sm.voices[v];
             if (voice.isEmpty()) continue;
-            int[] starts = voice.starts();
+            int[] starts = startsOf(voice);
             List<ChordGeom> geoms = new ArrayList<ChordGeom>();
             ChordGeom[] byIdx = new ChordGeom[voice.items.size()];
             for (int i = 0; i < voice.items.size(); i++) {
@@ -1238,7 +1597,7 @@ public final class Layout {
 
     private void emitChord(StaffGen g, ChordGeom cg, Pos pos, int sysIdx) {
         Chord c = cg.chord;
-        boolean drums = isDrums(pos.staff) && s.clefAt(pos.staff, pos.measure) == Clef.PERC;
+        boolean drums = isDrums(pos.staff) && clefAt(pos.staff, pos.measure) == Clef.PERC;
         float minX = cg.x, maxX = cg.x + cg.headW;
         for (int i = 0; i < c.notes.size(); i++) {
             minX = Math.min(minX, cg.x + cg.noteDx[i]);
@@ -1508,7 +1867,7 @@ public final class Layout {
                 }
             }
         }
-        int sysStart = Syllables.globalTick(s, m0, 0), sysEnd = Syllables.globalTick(s, m1, s.measures.get(m1).ticks());
+        int sysStart = globalTick(m0, 0), sysEnd = globalTick(m1, s.measures.get(m1).ticks());
         for (Spanners.Span sp : spans) {
             if (sp.kind != 0 && sp.staff == st && sp.startTick < sysEnd && sp.endTick > sysStart) hasDyn = true;
         }
@@ -1522,7 +1881,7 @@ public final class Layout {
         for (int m = m0; m <= m1; m++) {
             for (int v = 0; v < StaffMeasure.VOICES; v++) {
                 Voice voice = s.measures.get(m).staves.get(st).voices[v];
-                int[] starts = voice.starts();
+                int[] starts = startsOf(voice);
                 for (int i = 0; i < voice.items.size(); i++) {
                     ChordRest cr = voice.items.get(i);
                     float x = dl.xAt(m, starts[i]);
@@ -1793,7 +2152,7 @@ public final class Layout {
         int[] mt = Spanners.posOf(s, global);
         if (mt[1] >= s.measures.get(mt[0]).ticks()) return null;
         for (Voice v : s.measures.get(mt[0]).staves.get(st).voices) {
-            int i = v.indexAt(mt[1]);
+            int i = indexAt(v, mt[1]);
             if (i >= 0 && v.items.get(i).dynamic != null) return v.items.get(i).dynamic;
         }
         return null;
@@ -1849,10 +2208,10 @@ public final class Layout {
             float y2 = up ? (endStem ? bt.y - 3.3f : bt.y - 0.9f) : (endStem ? bb.y + 3.3f : bb.y + 0.9f);
             // the notes in between (and their stems) the slur must clear
             List<float[]> between = new ArrayList<float[]>();
-            int base = Syllables.globalTick(s, sp.measure, 0);
+            int base = globalTick(sp.measure, 0);
             for (int m = sp.measure; m <= sp.endMeasure && m < s.measures.size(); m++) {
                 Voice voice = s.measures.get(m).staves.get(sp.staff).voices[sp.voice];
-                int[] starts = voice.starts();
+                int[] starts = startsOf(voice);
                 for (int i = 0; i < voice.items.size(); i++) {
                     int gt = base + starts[i];
                     if (gt <= sp.startTick || gt >= sp.endTick || !(voice.items.get(i) instanceof Chord)) continue;
@@ -1959,7 +2318,7 @@ public final class Layout {
             }
             if (!Syllables.hyphenated(h.cr.lyric)) continue;
             Voice voice = s.measures.get(h.pos.measure).staves.get(h.pos.staff).voices[h.pos.voice];
-            ChordRest next = Syllables.next(s, h.pos.measure, h.pos.staff, h.pos.voice, voice.indexAt(h.pos.tick));
+            ChordRest next = Syllables.next(s, h.pos.measure, h.pos.staff, h.pos.voice, indexAt(voice, h.pos.tick));
             DisplayList.Hit n = next == null ? null : at.get(next);
             if (n == null) continue;
             int sa = dl.measures.get(h.pos.measure).system, sb = dl.measures.get(n.pos.measure).system;
@@ -1983,8 +2342,8 @@ public final class Layout {
     private void melisma(DisplayList.Hit h) {
         int st = h.pos.staff, v = h.pos.voice;
         Voice voice = s.measures.get(h.pos.measure).staves.get(st).voices[v];
-        int[] end = Syllables.melismaEnd(s, h.pos.measure, st, v, voice.indexAt(h.pos.tick));
-        int endTick = s.measures.get(end[0]).staves.get(st).voices[v].starts()[end[1]];
+        int[] end = Syllables.melismaEnd(s, h.pos.measure, st, v, indexAt(voice, h.pos.tick));
+        int endTick = startsOf(s.measures.get(end[0]).staves.get(st).voices[v])[end[1]];
         float endX = dl.xAt(end[0], endTick) + HEAD_W;
         boolean oneNote = h.cr.melisma == 1;
         int sa = dl.measures.get(h.pos.measure).system, sb = dl.measures.get(end[0]).system;
@@ -2037,7 +2396,7 @@ public final class Layout {
             for (int st = 0; st < staffCount; st++) {
                 for (int v = 0; v < StaffMeasure.VOICES; v++) {
                     Voice voice = s.measures.get(m).staves.get(st).voices[v];
-                    int[] starts = voice.starts();
+                    int[] starts = startsOf(voice);
                     for (int i = 0; i < voice.items.size(); i++) {
                         ChordRest cr = voice.items.get(i);
                         if (!(cr instanceof Chord)) continue;
@@ -2077,7 +2436,7 @@ public final class Layout {
         }
         if (mm >= s.measures.size()) return null;
         Voice voice = s.measures.get(mm).staves.get(st).voices[v];
-        int idx = voice.indexAt(t);
+        int idx = indexAt(voice, t);
         if (idx < 0) return null;
         ChordRest cr = voice.items.get(idx);
         return cr instanceof Chord ? (Chord) cr : null;

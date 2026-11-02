@@ -1269,8 +1269,8 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
 
     private void followCursor() {
         if (st == null) return;
-        if (st.inputMode && st.cursor != null) view.ensureVisible(st.cursor.measure, st.cursor.staff, true);
-        else if (st.selPos != null) view.ensureVisible(st.selPos.measure, st.selPos.staff, true);
+        if (st.inputMode && st.cursor != null) view.ensureVisible(st.cursor.measure, st.cursor.staff, st.cursor.tick, true);
+        else if (st.selPos != null) view.ensureVisible(st.selPos.measure, st.selPos.staff, st.selPos.tick, true);
     }
 
     private void toast(String s) {
@@ -1362,7 +1362,7 @@ public final class EditorActivity extends Activity implements ScoreView.Listener
             @Override
             public void onPosition(int measure, int t2) {
                 view.setPlayPosition(measure, t2);
-                view.ensureVisible(measure, 0, true);
+                view.ensureVisible(measure, 0, t2, true);
             }
 
             @Override

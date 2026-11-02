@@ -84,6 +84,8 @@ public final class DisplayList {
         public float[] staffY;
         public int firstMeasure, lastMeasure;
         public float top, bottom;
+        /** Wider than the page (see Layout.Options.scrollWideSystems): scrolled sideways in the editor. */
+        public boolean wide;
     }
 
     public static final class MeasureInfo {

@@ -54,6 +54,90 @@ public class ModelTests {
         return Score.create("Test", "Me", parts, 4, 4, 2, 100, 4);
     }
 
+    static String lastEdit = "";
+
+    static String modelFields(Class<?>... cs) {
+        StringBuilder b = new StringBuilder();
+        for (Class<?> c : cs) {
+            java.util.TreeSet<String> names = new java.util.TreeSet<String>();
+            for (java.lang.reflect.Field f : c.getDeclaredFields()) {
+                if (!java.lang.reflect.Modifier.isStatic(f.getModifiers())) names.add(f.getName());
+            }
+            if (b.length() > 0) b.append(' ');
+            b.append(c.getSimpleName()).append(':');
+            boolean first = true;
+            for (String n : names) {
+                if (!first) b.append(',');
+                b.append(n);
+                first = false;
+            }
+        }
+        return b.toString();
+    }
+
+    /** One random edit through the editor, as a user could make it. */
+    static void randomEdit(io.github.vlesk.stave.edit.EditorState es, java.util.Random r) {
+        Score s = es.score;
+        int m = r.nextInt(s.measures.size()), st = r.nextInt(s.staffCount());
+        Voice v = s.measures.get(m).staves.get(st).voices[0];
+        int i = r.nextInt(v.items.size());
+        Pos p = new Pos(m, st, 0, v.starts()[i]);
+        int op = r.nextInt(17);
+        lastEdit = "op " + op + " at " + p;
+        es.stopInput();
+        es.endLyric();
+        switch (op) {
+            case 0: es.selectNote(p, -1); es.transpose(r.nextBoolean() ? 1 : -2); break;
+            case 1: es.startInput(); es.setCursor(p); es.setDuration(Duration.EIGHTH + r.nextInt(2)); es.enterPitch(55 + r.nextInt(20), Integer.MIN_VALUE); es.enterPitch(55 + r.nextInt(20), Integer.MIN_VALUE); break;
+            case 2: if (es.beginLyric(p)) { es.lyricType(r.nextBoolean() ? "la-" : "lo "); es.lyricType(r.nextBoolean() ? "_" : "tra"); } break;
+            case 3: es.selectNote(p, -1); es.toggleArticulation(r.nextBoolean() ? Articulation.STACCATO : Articulation.ACCENT); break;
+            case 4: es.selectNote(p, -1); es.setDynamic(r.nextBoolean() ? "p" : "ff"); break;
+            case 5: es.selectNote(p, -1); es.slur(); break;
+            case 6: es.selectNote(p, -1); es.hairpin(r.nextBoolean() ? ChordRest.CRESCENDO : ChordRest.DIMINUENDO); break;
+            case 7: es.selectNote(p, -1); if (es.addGrace(Chord.ACCIACCATURA, Duration.EIGHTH)) es.enterPitch(60 + r.nextInt(12), Integer.MIN_VALUE); break;
+            case 8: es.selectMeasure(m, st); es.setKeySig(r.nextInt(7) - 3); break;
+            case 9: es.selectMeasure(m, st); es.setClef(r.nextBoolean() ? Clef.BASS : Clef.TREBLE); break;
+            case 10: es.selectNote(p, -1); es.deleteSelection(); break;
+            case 11: es.undo(); break;
+            case 12: es.redo(); break;
+            case 13: es.selectNote(p, -1); es.respell(); break;
+            case 14: es.selectMeasure(m, st); es.insertMeasureBefore(); break;
+            case 15: es.selectMeasure(m, 0); es.setTimeSig(r.nextBoolean() ? 3 : 4, 4, false); break;
+            default: es.selectNote(p, -1); es.applyAccidental(r.nextInt(3) - 1); break;
+        }
+        es.stopInput();
+        es.endLyric();
+    }
+
+    /** Everything a display list holds, as text, to compare two layouts exactly. */
+    static String dump(DisplayList dl) {
+        StringBuilder b = new StringBuilder();
+        b.append(dl.width).append(' ').append(dl.height).append('\n');
+        for (DisplayList.Item it : dl.items) {
+            b.append(it.kind).append(' ').append(it.x).append(' ').append(it.y).append(' ').append(it.x2).append(' ').append(it.y2).append(' ')
+                    .append(it.w).append(' ').append(it.glyph).append(' ').append(it.text).append(' ').append(it.font).append(' ').append(it.align)
+                    .append(' ').append(java.util.Arrays.toString(it.pts)).append(' ').append(it.color).append(' ')
+                    .append(System.identityHashCode(it.owner)).append(' ').append(System.identityHashCode(it.note)).append(' ').append(it.voice).append('\n');
+        }
+        for (List<DisplayList.Hit> hl : java.util.Arrays.asList(dl.hits, dl.lyricHits)) {
+            for (DisplayList.Hit h : hl) {
+                b.append("H ").append(h.x0).append(' ').append(h.y0).append(' ').append(h.x1).append(' ').append(h.y1).append(' ').append(h.pos)
+                        .append(' ').append(System.identityHashCode(h.cr)).append(' ').append(System.identityHashCode(h.note)).append(' ')
+                        .append(h.noteIdx).append(' ').append(h.baseline).append(' ').append(h.grace).append('\n');
+            }
+        }
+        for (DisplayList.SystemInfo si : dl.systems) {
+            b.append("S ").append(si.y).append(' ').append(si.x0).append(' ').append(si.x1).append(' ').append(java.util.Arrays.toString(si.staffY))
+                    .append(' ').append(si.firstMeasure).append(' ').append(si.lastMeasure).append(' ').append(si.top).append(' ').append(si.bottom)
+                    .append(' ').append(si.wide).append('\n');
+        }
+        for (DisplayList.MeasureInfo mi : dl.measures) {
+            b.append("M ").append(mi.system).append(' ').append(mi.x).append(' ').append(mi.width).append(' ').append(mi.contentX).append(' ')
+                    .append(java.util.Arrays.toString(mi.colTicks)).append(' ').append(java.util.Arrays.toString(mi.colX)).append(' ').append(mi.ticks).append('\n');
+        }
+        return b.toString();
+    }
+
     static String lyricAt(io.github.vlesk.stave.edit.EditorState es, Pos p) {
         ChordRest cr = ScoreEdit.elementAt(es.score, p);
         return cr == null ? null : cr.lyric;
@@ -603,6 +687,77 @@ public class ModelTests {
             // remove
             es.selectNote(new Pos(1, 0, 0, 0), -1);
             check(es.removeLines() && c4.hairpin == 0, "remove the hairpin");
+        }
+
+        // a bar too dense for the screen: squeezed onto the page for printing, kept at its natural width
+        // (and marked wide, to scroll sideways) in the editor
+        {
+            List<Part> vp = new ArrayList<Part>();
+            vp.add(Instruments.byId("violin").create());
+            Score dense = Score.create("D", "", vp, 4, 4, 0, 100, 2);
+            Pos dp = new Pos(0, 0, 0, 0);
+            for (int k = 0; k < 32; k++) {
+                int pitch = 61 + (k % 12);
+                Chord ch = new Chord();
+                ch.addNote(new Note(pitch, Pitch.spellWithAlter(pitch, 1)));
+                dp = ScoreEdit.enter(dense, dp, ch, Duration.N32, 0, false);
+            }
+            TextMetrics dtm = new TextMetrics() {
+                public float width(String t, int font, float sizeSp) {
+                    return t.length() * sizeSp * 0.5f;
+                }
+            };
+            Layout.Options print = new Layout.Options();
+            print.width = 30;
+            DisplayList pdl = Layout.layout(dense, dtm, print);
+            check(!pdl.systems.get(0).wide && pdl.systems.get(0).x1 <= 30 - print.marginX + 0.05f, "printing: squeezed onto the page");
+            Layout.Options edit = new Layout.Options();
+            edit.width = 30;
+            edit.scrollWideSystems = true;
+            DisplayList edl = Layout.layout(dense, dtm, edit);
+            check(edl.systems.get(0).wide && edl.systems.get(0).x1 > 30, "editor: natural width, scrolled sideways: " + edl.systems.get(0).x1);
+            check(!edl.systems.get(edl.systems.size() - 1).wide || edl.systems.size() == 1, "other systems unaffected");
+        }
+
+        // the layout cache: after every one of many random edits, a layout that reuses the last one is
+        // exactly the same as a fresh one; and it does reuse
+        {
+            Score cs = RenderPng.demo();
+            io.github.vlesk.stave.edit.EditorState es = new io.github.vlesk.stave.edit.EditorState(cs);
+            es.appendMeasures(6);
+            Layout.Cache cache = new Layout.Cache();
+            TextMetrics ctm = new TextMetrics() {
+                public float width(String t, int font, float sizeSp) {
+                    return t.length() * sizeSp * 0.5f;
+                }
+            };
+            java.util.Random rnd = new java.util.Random(7);
+            int reusedSystems = 0, mismatches = 0;
+            String firstMismatch = null;
+            for (int step = 0; step < 300; step++) {
+                randomEdit(es, rnd);
+                Layout.Options a = new Layout.Options();
+                a.width = 50;
+                a.cache = cache;
+                Layout.Options b = new Layout.Options();
+                b.width = 50;
+                String cached = dump(Layout.layout(es.score, ctm, a)), fresh = dump(Layout.layout(es.score, ctm, b));
+                reusedSystems += cache.systemHits;
+                if (!cached.equals(fresh)) {
+                    mismatches++;
+                    if (firstMismatch == null) firstMismatch = "step " + step + " " + lastEdit;
+                }
+            }
+            check(mismatches == 0, "cached layout differs from a fresh one: " + mismatches + " times, first at " + firstMismatch);
+            // every field the layout cache's signature covers: a new field must be added to
+            // Layout.measureSig (or noted here as not affecting layout) before this passes again
+            String fields = modelFields(Measure.class, StaffMeasure.class, Voice.class, ChordRest.class, Chord.class, Rest.class, Note.class, Tuplet.class);
+            check(fields.equals("Measure:actualTicks,endBarline,irregular,keyFifths,rehearsal,startRepeat,staves,tempo,tempoText,timeD,timeN,timeSymbol"
+                    + " StaffMeasure:clef,voices Voice:items"
+                    + " ChordRest:articulations,chordSymbol,dots,dynamic,hairpin,hairpinTicks,lyric,melisma,slurTicks,staffText,tuplet,type"
+                    + " Chord:graceKind,graces,notes,stemDir Rest:measureRest,measureTicks Note:forceAccidental,pitch,tieForward,tpc"
+                    + " Tuplet:actual,baseType,normal"), "model fields changed, update Layout.measureSig: " + fields);
+            check(reusedSystems > 300, "the cache reuses systems: " + reusedSystems);
         }
 
         // double dots and tuplets other than triplets, with the dot button and the tuplet popup
