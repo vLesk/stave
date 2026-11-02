@@ -6,8 +6,8 @@ tablets. It reads and writes MuseScore's own file format (`.mscz` / `.mscx`), us
 note input mode, palettes, voices, and MuseScore's keyboard shortcuts. The desktop interface was
 redesigned for touch screens.
 
-> **Download:** the latest APK from [Releases](https://github.com/vLesk/musescore-android/releases/latest)
-> (or [`dist/stave-0.2.0.apk`](dist/stave-0.2.0.apk)). Android 7.0+, targets Android 15.
+> **Download:** the latest APK from [Releases](https://github.com/vLesk/musescore-android/releases/latest).
+> Android 7.0+, targets Android 15.
 > Enable *Install unknown apps* for your browser or file manager, then open the APK.
 
 *Unofficial project. "MuseScore" is a trademark of Muse Group, and this app is not affiliated
@@ -17,7 +17,8 @@ with or endorsed by Muse Group, so it ships under its own name.*
 |---|---|---|---|---|
 | ![](docs/screenshots/library.png) | ![](docs/screenshots/editor-imported.png) | ![](docs/screenshots/floating-toolbar.png) | ![](docs/screenshots/note-input.png) | ![](docs/screenshots/palettes.png) |
 
-*Screenshots come from the Robolectric UI tests, rendered with Android's real graphics stack on the JVM.*
+*Screenshots come from the Robolectric UI tests, rendered with Android's real graphics stack on the JVM.
+They show version 0.2.0; later versions added controls (slur, hairpin, grace, respell, the lyric bar).*
 
 ## Why not a direct recompile of MuseScore?
 
@@ -25,7 +26,7 @@ MuseScore 4 is about a million lines of C++/Qt 6/QML. Building it for Android ne
 the Android NDK. Even with those, the result would be a desktop UI (menus, docked panels, mouse
 hover, keyboard-first input) squeezed onto a 6-inch touchscreen. Stave reimplements the parts
 musicians use day to day as a native Android app (Java, Android framework only, no third-party
-libraries, about 550 KB). It stays file-compatible with MuseScore, so you can start a score on
+libraries, about 600 KB). It stays file-compatible with MuseScore, so you can start a score on
 your phone and finish it on the desktop, or the other way round.
 
 ## Features
@@ -35,20 +36,23 @@ your phone and finish it on the desktop, or the other way round.
 | Score files `.mscz`/`.mscx` (3.x–5.x) | Open and save. Writes MuseScore 4.20-format `.mscz` that MuseScore Studio opens directly |
 | MusicXML import/export | `.musicxml`, `.xml`, `.mxl` import; MusicXML 4.0 export |
 | Export PDF / MIDI | A4 PDF at MuseScore's default staff size; Standard MIDI File |
-| Note input mode (`N`), durations, dots, rests, ties, triplets | Same, from a thumb-reachable bottom toolbar |
-| Typing note names A–G | **On-screen piano keyboard** (multi-touch, scrollable octaves), plus tap-on-staff entry |
+| Note input mode (`N`), durations, dots and double dots, rests, ties | Same, from a thumb-reachable bottom toolbar |
+| Tuplets (`Ctrl+2`–`Ctrl+9`) | Triplet button; long-press it (or `Ctrl+2`–`Ctrl+6`) for duplets, quadruplets, quintuplets and sextuplets. The value selected when you turn tuplets on is the tuplet's unit |
+| Typing note names A–G | **On-screen piano keyboard** (scrollable octaves): keys pressed while others are held **play a chord**. Plus tap-on-staff entry |
 | Mouse note input with a shadow note | Touch the staff and a **ghost note follows your finger**. A **pitch bubble above the finger** names the note your finger is covering. Lift to enter |
 | Voices 1–4 (blue/green/orange/purple) | Same colors; voice chips in the toolbar |
-| Add to chord (Shift+letter) | "Add to chord" toggle |
-| ↑/↓, Ctrl+↑/↓ transpose | Buttons, plus the same hardware-keyboard shortcuts |
+| Add to chord (Shift+letter) | Held piano keys, or the "Add to chord" toggle |
+| ↑/↓, Ctrl+↑/↓ transpose, `J` respell | Buttons, plus the same hardware-keyboard shortcuts |
+| Slurs (`S`) and hairpins (`<` `>`) | Same keys and toolbar buttons. In note input a slur or hairpin follows the notes you enter until pressed again; on a selected note each press extends it by one note. Hairpins shape playback volume, slurs play legato |
+| Grace notes | Grace button (long-press: acciaccatura, appoggiatura, 16th appoggiatura) adds one before the selected note; the next piano key sets its pitch |
 | Palettes (clefs, keys, times, accidentals, articulations, dynamics, barlines, text) | **Bottom-sheet palette** with large 76 dp cells and category chips |
-| Lyrics (type, Space → next syllable) | Lyrics dialog with a **Next** button / IME action that walks note by note |
+| Lyrics (type, Space → next syllable, `-` hyphen, `_` melisma) | **Lyric entry mode, typed directly on the score** with the virtual or a hardware keyboard: Space moves to the next note, `-` and `_` work as in MuseScore. A bar above the keyboard has previous/next, `-`, `_` and **Done**. Hyphens and melisma lines are laid out as MuseScore does |
 | Chord symbols, staff text, tempo, rehearsal marks | Yes |
 | Repeats, double/final/dashed barlines, pickup measure | Yes |
 | Copy/paste, range selection (Shift+click) | Tap a measure, **long-press** to extend the range |
 | Instruments panel | Add, remove and reorder instruments (40+ from MuseScore's instrument list) |
-| Mixer, playback with cursor | Playback through Android's built-in General MIDI synth, follow-along highlighting, speed 50–200 %, per-part volume and mute |
-| Page view | **Reflowed continuous view** that wraps to the screen width (no sideways scrolling), with pinch-to-zoom |
+| Mixer, playback with cursor | Playback through Android's built-in General MIDI synth, a cursor that moves smoothly through each measure, speed 50–200 %, per-part volume and mute |
+| Page view | **Reflowed continuous view** that wraps to the screen width, with pinch-to-zoom. A line too dense for the screen keeps its spacing and **scrolls sideways** on its own. Turning the device keeps your place in the score |
 | New score wizard | One-screen form with templates (piano, SATB, string quartet, lead sheet …) and sensible defaults |
 
 ## Android usability and design choices
@@ -68,10 +72,13 @@ patterns (Soundslice's tablet piano mode, Sibelius for mobile):
   note input and clears the selection before it exits.
 * **Adaptive layout.** On wide screens (≥ 720 dp: tablets, foldables, landscape) the two toolbars
   merge into one row, the palette sheet is width-capped and the keyboard grows taller. The score
-  re-flows to any width.
+  re-flows to any width, and rotating keeps the same place in the score and the zoom.
 * **Haptic and audio feedback** on every note entry. A low-latency synth previews each pitch.
 * **Hardware keyboards and Chromebooks** get MuseScore's shortcuts: `N`, `A–G`, `1–7`, `.`, `0`,
-  `+`, arrows, `Ctrl+Z/Y/C/V/A/S`, `Space`, and more. See *⋮ → Keyboard shortcuts*.
+  `+`, `S`, `<`, `>`, `J`, arrows, `Ctrl+2–6`, `Ctrl+Z/Y/C/V/A/S`, `Space`, and more. See
+  *⋮ → Keyboard shortcuts*.
+* **Fast on long scores.** After an edit only the systems it touches are laid out again; the
+  rest of the engraving is reused.
 * **Storage Access Framework** for import and export (no storage permission requested). The
   **share sheet** sends PDF, MusicXML, MIDI or `.mscz`, and Stave registers as an *Open with* target
   for MuseScore and MusicXML files.
@@ -127,6 +134,10 @@ to a GitHub release. *Delete release* is a maintenance workflow that removes a r
 |---|---|
 | 0.1.0 | First Android port: score model, MuseScore/MusicXML/MIDI/PDF I/O, engraving, note input, piano keyboard, palettes, playback |
 | 0.2.0 | Redesign: floating contextual toolbar, docked note-input toolbar with button groups and labels, Undo snackbars, library search and sorting, first-run tip |
+| 0.3.0 | System barlines, brackets and braces stay visible while scrolling |
+| 0.4.0 | The playback cursor moves continuously through each measure |
+| 0.5.0 | Lyrics typed directly on the score in a lyric entry mode, with MuseScore's hyphen, melisma and layout rules |
+| 0.6.0 | Slurs, hairpins, grace notes, double dots, duplets to sextuplets, respell, chords played on the piano, sideways scrolling of dense lines, faster editing of long scores, place kept on rotation, `rf` dynamic; fixes found by entering five real scores |
 
 ## Tests
 
@@ -163,16 +174,20 @@ app/src/main/java/io/github/vlesk/stave/
   io/       .mscz/.mscx reader+writer, MusicXML reader+writer, score library
   audio/    playback timeline, MIDI writer, MediaPlayer playback, preview synth
   ui/       activities and custom views (score canvas, piano, palettes)
-tools/      build.sh, test.sh, robolectric.sh, gen_glyphs.py
-test/       JVM tests, Java2D renderer, Robolectric UI tests
+tools/      build.sh, test.sh, robolectric.sh, simulate.sh (+ sim/extract.py), gen_glyphs.py
+test/       JVM tests, Java2D renderer, input simulation, Robolectric UI tests
 ```
 
 ## Known limitations
 
 * Scores are shown and edited at concert pitch. Transposing-instrument display is not implemented yet.
-* Not yet supported: slurs, hairpins, lines (8va, pedal), grace notes, cross-staff notation, tablature
-  and multi-measure rests. Imported files keep their notes, but these elements are dropped, and
-  the app lists what was simplified after import.
+* Not yet supported: other lines (8va, pedal, voltas, text lines), cross-staff notation, tablature,
+  measure repeats and multi-measure rests. Imported files keep their notes but drop these elements;
+  after import the app lists what it simplified (tablature, nested tuplets, measure repeats,
+  rhythms it could not read).
+* One slur and one hairpin can start on a note, so `< >` over a single held note is not possible.
+  Slurs from a grace note to its main note, and slurs across staves or voices, are not supported.
+* Septuplets and larger tuplets, triple dots and values shorter than a 64th are not offered.
 * Playback uses the platform's General MIDI synthesizer, not MuseScore's MuseSounds or SoundFonts.
 * Mid-measure clef changes and nested tuplets are not supported.
 
